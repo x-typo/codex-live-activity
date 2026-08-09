@@ -216,6 +216,70 @@ test("emits approval attention only after waitingOnApproval", async () => {
   assert.equal(outputs[2].attentionRequired, false);
 });
 
+test("correlates resolved requests with normalized pending request IDs", () => {
+  for (const [label, requestId] of [
+    ["whitespace", " request\napproval "],
+    ["maximum-length", `${"r".repeat(128)}truncated-suffix`],
+  ]) {
+    const reducer = new StatusReducer();
+    const threadId = `thread-resolved-${label}`;
+    const turnId = `turn-resolved-${label}`;
+    reducer.ingest(
+      {
+        method: "turn/started",
+        params: {
+          threadId,
+          turn: { id: turnId, status: "inProgress", items: [] },
+        },
+      },
+      "2026-08-09T20:22:00.000Z",
+    );
+    reducer.ingest(
+      {
+        id: requestId,
+        method: "item/commandExecution/requestApproval",
+        params: { threadId, turnId },
+      },
+      "2026-08-09T20:22:01.000Z",
+    );
+
+    const pending = reducer.ingest(
+      {
+        method: "thread/status/changed",
+        params: {
+          threadId,
+          status: { type: "active", activeFlags: ["waitingOnApproval"] },
+        },
+      },
+      "2026-08-09T20:22:02.000Z",
+    );
+    assert.equal(pending[0].source.correlation, "statusFlagAndPendingRequest");
+    assert.equal(pending[0].source.pendingRequestCount, 1);
+
+    reducer.ingest(
+      {
+        method: "serverRequest/resolved",
+        params: { threadId, requestId },
+      },
+      "2026-08-09T20:22:03.000Z",
+    );
+    const resolved = reducer.ingest(
+      {
+        method: "thread/status/changed",
+        params: {
+          threadId,
+          status: { type: "active", activeFlags: ["waitingOnApproval"] },
+        },
+      },
+      "2026-08-09T20:22:04.000Z",
+    );
+
+    assert.equal(resolved[0].source.correlation, "statusFlag");
+    assert.equal(resolved[0].source.pendingRequestCount, 0);
+    assertStatusRecords([...pending, ...resolved]);
+  }
+});
+
 test("accepts a confirmed approval status even when no request payload is retained", () => {
   const reducer = new StatusReducer();
   const outputs = reducer.ingest(

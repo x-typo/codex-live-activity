@@ -381,7 +381,9 @@ export class StatusReducer {
     if (!threadId) return;
     const task = this.tasks.get(threadId);
     if (!task) return;
-    task.pendingRequests.delete(String(params.requestId ?? ""));
+    const requestId = safeIdentifier(String(params.requestId ?? ""));
+    if (!requestId) return;
+    task.pendingRequests.delete(requestId);
   }
 
   #observeTurnActivity(params, observedAtMs) {
