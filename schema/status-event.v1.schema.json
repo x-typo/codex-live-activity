@@ -1,0 +1,130 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:codex-live-activity:status-event:v1",
+  "title": "Codex Live Activity redacted status event",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "threadId",
+    "turnId",
+    "observedAt",
+    "stateSince",
+    "state",
+    "attentionRequired",
+    "title",
+    "summary",
+    "source",
+    "aggregate"
+  ],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "threadId": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "turnId": {
+      "oneOf": [
+        { "type": "string", "minLength": 1, "maxLength": 128 },
+        { "type": "null" }
+      ]
+    },
+    "observedAt": { "type": "string", "format": "date-time" },
+    "stateSince": { "type": "string", "format": "date-time" },
+    "state": { "$ref": "#/$defs/state" },
+    "attentionRequired": { "type": "boolean" },
+    "title": {
+      "oneOf": [
+        { "type": "string", "minLength": 1, "maxLength": 96 },
+        { "type": "null" }
+      ]
+    },
+    "summary": { "type": "null" },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "signal", "correlation"],
+      "properties": {
+        "kind": {
+          "enum": ["appServer", "timer", "transport"]
+        },
+        "signal": {
+          "enum": [
+            "thread/started",
+            "thread/name/updated",
+            "turn/started",
+            "turn/completed",
+            "turn/activity",
+            "thread/status/changed",
+            "thread/closed",
+            "staleTimeout",
+            "streamClosed"
+          ]
+        },
+        "correlation": {
+          "enum": [
+            "direct",
+            "statusFlag",
+            "statusFlagAndPendingRequest",
+            "matchingTurnActivity",
+            "elapsedWithoutSignal"
+          ]
+        },
+        "pendingRequestCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "terminalStatus": {
+          "enum": ["completed", "failed", "interrupted"]
+        }
+      }
+    },
+    "aggregate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["total", "attention", "priorityState", "counts"],
+      "properties": {
+        "total": { "type": "integer", "minimum": 0 },
+        "attention": { "type": "integer", "minimum": 0 },
+        "priorityState": {
+          "oneOf": [
+            { "$ref": "#/$defs/state" },
+            { "type": "null" }
+          ]
+        },
+        "counts": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "running",
+            "waitingForApproval",
+            "waitingForInput",
+            "ready",
+            "blocked",
+            "stale",
+            "disconnected"
+          ],
+          "properties": {
+            "running": { "type": "integer", "minimum": 0 },
+            "waitingForApproval": { "type": "integer", "minimum": 0 },
+            "waitingForInput": { "type": "integer", "minimum": 0 },
+            "ready": { "type": "integer", "minimum": 0 },
+            "blocked": { "type": "integer", "minimum": 0 },
+            "stale": { "type": "integer", "minimum": 0 },
+            "disconnected": { "type": "integer", "minimum": 0 }
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "state": {
+      "enum": [
+        "running",
+        "waitingForApproval",
+        "waitingForInput",
+        "ready",
+        "blocked",
+        "stale",
+        "disconnected"
+      ]
+    }
+  }
+}

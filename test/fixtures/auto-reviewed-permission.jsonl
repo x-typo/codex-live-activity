@@ -1,0 +1,7 @@
+{"observedAt":"2026-08-09T20:10:00.000Z","message":{"method":"turn/started","params":{"threadId":"thread-auto","turn":{"id":"turn-auto","items":[],"status":"inProgress"}}}}
+{"observedAt":"2026-08-09T20:10:01.000Z","message":{"method":"hook/started","params":{"threadId":"thread-auto","turnId":"turn-auto","run":{"eventName":"PermissionRequest","id":"hook-auto","status":"inProgress"}}}}
+{"observedAt":"2026-08-09T20:10:01.500Z","message":{"id":"request-auto","method":"item/commandExecution/requestApproval","params":{"threadId":"thread-auto","turnId":"turn-auto","itemId":"item-auto","startedAtMs":1786306201500}}}
+{"observedAt":"2026-08-09T20:10:02.000Z","message":{"method":"hook/completed","params":{"threadId":"thread-auto","turnId":"turn-auto","run":{"eventName":"PermissionRequest","id":"hook-auto","status":"completed"}}}}
+{"observedAt":"2026-08-09T20:10:02.500Z","message":{"method":"serverRequest/resolved","params":{"threadId":"thread-auto","requestId":"request-auto"}}}
+{"observedAt":"2026-08-09T20:10:03.000Z","message":{"method":"thread/status/changed","params":{"threadId":"thread-auto","status":{"type":"active","activeFlags":[]}}}}
+{"observedAt":"2026-08-09T20:10:04.000Z","message":{"method":"turn/completed","params":{"threadId":"thread-auto","turn":{"id":"turn-auto","items":[],"status":"completed"}}}}

@@ -1,0 +1,13 @@
+{
+  "name": "codex-live-activity-status-harness",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "harness": "node bin/codex-status-harness.mjs",
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

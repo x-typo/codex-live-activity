@@ -1,0 +1,4 @@
+{"observedAt":"2026-08-09T20:50:00.000Z","message":{"method":"turn/started","params":{"threadId":"thread-stale","turn":{"id":"turn-stale","items":[],"status":"inProgress"}}}}
+{"observedAt":"2026-08-09T20:50:06.000Z","control":"sweep"}
+{"observedAt":"2026-08-09T20:50:07.000Z","message":{"method":"turn/started","params":{"threadId":"thread-disconnect","turn":{"id":"turn-disconnect","items":[],"status":"inProgress"}}}}
+{"observedAt":"2026-08-09T20:50:08.000Z","control":"disconnect"}
