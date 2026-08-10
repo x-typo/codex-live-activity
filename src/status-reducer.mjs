@@ -60,6 +60,50 @@ function safePrefix(value, maximumCodePoints) {
   return [...value.toWellFormed()].slice(0, maximumCodePoints).join("");
 }
 
+function isLeapYear(year) {
+  return year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+}
+
+function isRfc3339DateTime(value) {
+  const match = value.match(
+    /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d+)?(?:Z|[+-](\d{2}):(\d{2}))$/,
+  );
+  if (!match) return false;
+
+  const [, yearText, monthText, dayText, hourText, minuteText, secondText] =
+    match;
+  const year = Number(yearText);
+  const month = Number(monthText);
+  const day = Number(dayText);
+  const daysInMonth = [
+    31,
+    isLeapYear(year) ? 29 : 28,
+    31,
+    30,
+    31,
+    30,
+    31,
+    31,
+    30,
+    31,
+    30,
+    31,
+  ];
+
+  return (
+    month >= 1 &&
+    month <= 12 &&
+    day >= 1 &&
+    day <= daysInMonth[month - 1] &&
+    Number(hourText) <= 23 &&
+    Number(minuteText) <= 59 &&
+    Number(secondText) <= 59 &&
+    (match[7] === undefined || Number(match[7]) <= 23) &&
+    (match[8] === undefined || Number(match[8]) <= 59) &&
+    Number.isFinite(Date.parse(value))
+  );
+}
+
 function toEpochMilliseconds(value) {
   if (value instanceof Date) return value.getTime();
   if (typeof value === "number") return value;
@@ -68,6 +112,11 @@ function toEpochMilliseconds(value) {
 }
 
 function validatedEpochMilliseconds(value) {
+  if (typeof value === "string" && !isRfc3339DateTime(value)) {
+    throw new TypeError(
+      "observedAt must be an RFC 3339-compatible date or epoch timestamp",
+    );
+  }
   const milliseconds = toEpochMilliseconds(value);
   const date = new Date(milliseconds);
   if (!Number.isFinite(milliseconds) || !Number.isFinite(date.getTime())) {

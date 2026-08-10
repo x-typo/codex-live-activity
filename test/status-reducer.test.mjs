@@ -557,6 +557,10 @@ test("rejects timestamps outside the RFC 3339 contract before state mutation", (
     -1e20,
     8_640_000_000_000_000,
     -8_640_000_000_000_000,
+    "2025-02-29T00:00:00.000Z",
+    "2026-02-30T00:00:00.000Z",
+    "2026-04-31T00:00:00.000Z",
+    "2026-08-09T24:00:00.000Z",
   ]) {
     const ingestReducer = new StatusReducer();
     assert.throws(
@@ -607,6 +611,33 @@ test("rejects timestamps outside the RFC 3339 contract before state mutation", (
     );
     assert.deepEqual(reducer.snapshot(), beforeInvalidControl);
     assertStatusRecords(beforeInvalidControl);
+  }
+});
+
+test("accepts schema-compatible RFC 3339 string timestamps", () => {
+  for (const observedAt of [
+    "2026-08-09T20:38:00Z",
+    "2026-08-09T20:38:00.123456Z",
+    "2026-08-09T20:38:00.123+05:30",
+  ]) {
+    const reducer = new StatusReducer();
+    const records = reducer.ingest(
+      {
+        method: "turn/started",
+        params: {
+          threadId: `thread-valid-${observedAt}`,
+          turn: {
+            id: `turn-valid-${observedAt}`,
+            status: "inProgress",
+            items: [],
+          },
+        },
+      },
+      observedAt,
+    );
+
+    assert.equal(records[0].observedAt, new Date(observedAt).toISOString());
+    assertStatusRecords(records);
   }
 });
 
