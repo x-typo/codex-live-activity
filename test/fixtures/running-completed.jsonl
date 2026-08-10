@@ -1,0 +1,4 @@
+{"observedAt":"2026-08-09T20:00:00.000Z","message":{"method":"thread/started","params":{"thread":{"id":"thread-running","name":"Status harness smoke","status":{"type":"idle"}}}}}
+{"observedAt":"2026-08-09T20:00:01.000Z","message":{"method":"turn/started","params":{"threadId":"thread-running","turn":{"id":"turn-running","items":[],"status":"inProgress"}}}}
+{"observedAt":"2026-08-09T20:00:02.000Z","message":{"method":"thread/status/changed","params":{"threadId":"thread-running","status":{"type":"active","activeFlags":[]}}}}
+{"observedAt":"2026-08-09T20:00:03.000Z","message":{"method":"turn/completed","params":{"threadId":"thread-running","turn":{"id":"turn-running","items":[],"status":"completed"}}}}

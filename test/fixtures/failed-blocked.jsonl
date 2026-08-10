@@ -1,0 +1,2 @@
+{"observedAt":"2026-08-09T20:40:00.000Z","message":{"method":"turn/started","params":{"threadId":"thread-failed","turn":{"id":"turn-failed","items":[],"status":"inProgress"}}}}
+{"observedAt":"2026-08-09T20:40:01.000Z","message":{"method":"turn/completed","params":{"threadId":"thread-failed","turn":{"id":"turn-failed","items":[],"status":"failed","error":{"message":"redacted"}}}}}

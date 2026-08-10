@@ -1,0 +1,3 @@
+{"observedAt":"2026-08-09T20:30:00.000Z","message":{"method":"turn/started","params":{"threadId":"thread-input","turn":{"id":"turn-input","items":[],"status":"inProgress"}}}}
+{"observedAt":"2026-08-09T20:30:01.000Z","message":{"id":"request-input","method":"item/tool/requestUserInput","params":{"threadId":"thread-input","turnId":"turn-input","itemId":"item-input","isBlocking":true,"questions":[]}}}
+{"observedAt":"2026-08-09T20:30:02.000Z","message":{"method":"thread/status/changed","params":{"threadId":"thread-input","status":{"type":"active","activeFlags":["waitingOnUserInput"]}}}}

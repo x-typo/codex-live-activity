@@ -1,0 +1,5 @@
+{"observedAt":"2026-08-09T20:20:00.000Z","message":{"method":"turn/started","params":{"threadId":"thread-approval","turn":{"id":"turn-approval","items":[],"status":"inProgress"}}}}
+{"observedAt":"2026-08-09T20:20:01.000Z","message":{"id":"request-approval","method":"item/commandExecution/requestApproval","params":{"threadId":"thread-approval","turnId":"turn-approval","itemId":"item-approval","startedAtMs":1786306801000}}}
+{"observedAt":"2026-08-09T20:20:02.000Z","message":{"method":"thread/status/changed","params":{"threadId":"thread-approval","status":{"type":"active","activeFlags":["waitingOnApproval"]}}}}
+{"observedAt":"2026-08-09T20:20:03.000Z","message":{"method":"serverRequest/resolved","params":{"threadId":"thread-approval","requestId":"request-approval"}}}
+{"observedAt":"2026-08-09T20:20:04.000Z","message":{"method":"thread/status/changed","params":{"threadId":"thread-approval","status":{"type":"active","activeFlags":[]}}}}
