@@ -27,6 +27,7 @@ const TURN_ACTIVITY_METHODS = new Set([
   "item/reasoning/summaryPartAdded",
   "item/reasoning/textDelta",
   "item/commandExecution/outputDelta",
+  "item/commandExecution/terminalInteraction",
   "item/fileChange/patchUpdated",
   "item/mcpToolCall/progress",
 ]);
@@ -36,6 +37,8 @@ const ACTIVE_STATES = new Set([
   "waitingForApproval",
   "waitingForInput",
 ]);
+
+const MAX_TERMINAL_TURN_TOMBSTONES = 64;
 
 const RFC3339_ISO_INSTANT =
   /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
@@ -301,6 +304,7 @@ export class StatusReducer {
     if (!threadId || !turnId) return [];
 
     const task = this.#task(threadId);
+    if (task.terminalTurnIds.has(turnId)) return [];
     task.turnId = turnId;
     task.terminalStatus = null;
     return [
@@ -321,6 +325,7 @@ export class StatusReducer {
     if (!threadId) return [];
 
     const task = this.#task(threadId);
+    if (task.terminalTurnIds.has(turnId)) return [];
     if (task.turnId !== null && task.turnId !== turnId) return [];
     const terminalStatus = ["completed", "failed", "interrupted"].includes(
       turn.status,
@@ -331,6 +336,11 @@ export class StatusReducer {
 
     task.turnId = turnId;
     task.terminalStatus = terminalStatus;
+    task.terminalTurnIds.add(turnId);
+    if (task.terminalTurnIds.size > MAX_TERMINAL_TURN_TOMBSTONES) {
+      const oldestTurnId = task.terminalTurnIds.values().next().value;
+      task.terminalTurnIds.delete(oldestTurnId);
+    }
     task.pendingRequests.clear();
     const state = terminalStatus === "completed" ? "ready" : "blocked";
     return [
@@ -357,6 +367,11 @@ export class StatusReducer {
 
   #applyThreadStatus(task, status, observedAtMs, signal) {
     if (status.type === "active") {
+      if (task.terminalStatus !== null) {
+        task.turnId = null;
+        task.terminalStatus = null;
+      }
+
       const flags = Array.isArray(status.activeFlags) ? status.activeFlags : [];
       let state = "running";
       if (flags.includes("waitingOnApproval")) state = "waitingForApproval";
@@ -415,11 +430,13 @@ export class StatusReducer {
     if (kind === "input" && params.isBlocking === false) return;
 
     const task = this.#task(threadId);
+    const turnId = safeIdentifier(params.turnId);
+    if (turnId !== null && task.terminalTurnIds.has(turnId)) return;
     const requestId = safeIdentifier(String(message.id ?? ""));
     if (!requestId) return;
     task.pendingRequests.set(requestId, {
       kind,
-      turnId: safeIdentifier(params.turnId),
+      turnId,
       observedAtMs,
     });
     task.lastSignalAtMs = observedAtMs;
@@ -442,6 +459,7 @@ export class StatusReducer {
 
     const task = this.tasks.get(threadId);
     if (!task || !["running", "stale"].includes(task.state)) return [];
+    if (task.terminalTurnIds.has(turnId)) return [];
     if (task.turnId !== null && task.turnId !== turnId) return [];
     if (task.state === "stale") {
       return [
@@ -489,6 +507,7 @@ export class StatusReducer {
         lastSignalAtMs: null,
         lastSource: null,
         terminalStatus: null,
+        terminalTurnIds: new Set(),
         pendingRequests: new Map(),
       };
       this.tasks.set(threadId, task);

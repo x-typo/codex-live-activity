@@ -194,6 +194,15 @@ test("validates every emitted state and signal against the complete v1 schema", 
     () => validateJsonSchema(records[0], { ...statusSchema, allOf: [] }),
     /unsupported schema keyword allOf/,
   );
+
+  assert.throws(
+    () =>
+      validateJsonSchema(records[0], {
+        ...statusSchema,
+        additionalProperties: { type: "string" },
+      }),
+    /\$schema\.additionalProperties must be a boolean/,
+  );
 });
 
 test("never emits attention from PermissionRequest hook observation alone", async () => {
@@ -348,6 +357,7 @@ test("counts allowlisted activity as running liveness without retaining payloads
     "item/reasoning/summaryPartAdded",
     "item/reasoning/textDelta",
     "item/commandExecution/outputDelta",
+    "item/commandExecution/terminalInteraction",
     "item/fileChange/patchUpdated",
     "item/mcpToolCall/progress",
   ]) {
@@ -549,6 +559,232 @@ test("ignores a late completion from an older turn", () => {
   );
   assert.deepEqual(reducer.snapshot(), newerTurn);
   assertStatusRecords(newerTurn);
+});
+
+test("clears terminal correlation when active precedes the next turn", () => {
+  const reducer = new StatusReducer();
+  const [started] = reducer.ingest(
+    {
+      method: "turn/started",
+      params: {
+        threadId: "thread-terminal-reset",
+        turn: { id: "turn-old", status: "inProgress", items: [] },
+      },
+    },
+    "2026-08-09T20:37:10.000Z",
+  );
+  const [completed] = reducer.ingest(
+    {
+      method: "turn/completed",
+      params: {
+        threadId: "thread-terminal-reset",
+        turn: { id: "turn-old", status: "completed", items: [] },
+      },
+    },
+    "2026-08-09T20:37:11.000Z",
+  );
+  const [active] = reducer.ingest(
+    {
+      method: "thread/status/changed",
+      params: {
+        threadId: "thread-terminal-reset",
+        status: { type: "active", activeFlags: [] },
+      },
+    },
+    "2026-08-09T20:37:12.000Z",
+  );
+
+  assert.equal(active.state, "running");
+  assert.equal(active.turnId, null);
+  assert.deepEqual(
+    reducer.ingest(
+      {
+        method: "turn/started",
+        params: {
+          threadId: "thread-terminal-reset",
+          turn: { id: "turn-old", status: "inProgress", items: [] },
+        },
+      },
+      "2026-08-09T20:37:12.500Z",
+    ),
+    [],
+  );
+  assert.equal(reducer.snapshot()[0].turnId, null);
+  assert.deepEqual(
+    reducer.ingest(
+      {
+        method: "turn/completed",
+        params: {
+          threadId: "thread-terminal-reset",
+          turn: { id: "turn-old", status: "completed", items: [] },
+        },
+      },
+      "2026-08-09T20:37:13.000Z",
+    ),
+    [],
+  );
+  assert.equal(reducer.snapshot()[0].state, "running");
+  assert.equal(reducer.snapshot()[0].turnId, null);
+
+  const [nextCompleted] = reducer.ingest(
+    {
+      method: "turn/completed",
+      params: {
+        threadId: "thread-terminal-reset",
+        turn: { id: "turn-new", status: "completed", items: [] },
+      },
+    },
+    "2026-08-09T20:37:14.000Z",
+  );
+  assert.equal(nextCompleted.state, "ready");
+  assert.equal(nextCompleted.turnId, "turn-new");
+  assert.equal(nextCompleted.source.terminalStatus, "completed");
+
+  const [nextActive] = reducer.ingest(
+    {
+      method: "thread/status/changed",
+      params: {
+        threadId: "thread-terminal-reset",
+        status: { type: "active", activeFlags: [] },
+      },
+    },
+    "2026-08-09T20:37:15.000Z",
+  );
+  assert.equal(nextActive.turnId, null);
+  for (const turnId of ["turn-old", "turn-new"]) {
+    assert.deepEqual(
+      reducer.ingest(
+        {
+          method: "turn/completed",
+          params: {
+            threadId: "thread-terminal-reset",
+            turn: { id: turnId, status: "completed", items: [] },
+          },
+        },
+        "2026-08-09T20:37:16.000Z",
+      ),
+      [],
+    );
+  }
+  assert.equal(reducer.snapshot()[0].state, "running");
+  assert.equal(reducer.snapshot()[0].turnId, null);
+  assertStatusRecords([started, completed, active, nextCompleted, nextActive]);
+});
+
+test("matches new pending requests after terminal correlation is cleared", () => {
+  const reducer = new StatusReducer();
+  reducer.ingest(
+    {
+      method: "turn/started",
+      params: {
+        threadId: "thread-terminal-request",
+        turn: { id: "turn-old", status: "inProgress", items: [] },
+      },
+    },
+    "2026-08-09T20:37:20.000Z",
+  );
+  reducer.ingest(
+    {
+      method: "turn/completed",
+      params: {
+        threadId: "thread-terminal-request",
+        turn: { id: "turn-old", status: "completed", items: [] },
+      },
+    },
+    "2026-08-09T20:37:21.000Z",
+  );
+  reducer.ingest(
+    {
+      id: "request-old-turn",
+      method: "item/commandExecution/requestApproval",
+      params: {
+        threadId: "thread-terminal-request",
+        turnId: "turn-old",
+      },
+    },
+    "2026-08-09T20:37:22.000Z",
+  );
+  reducer.ingest(
+    {
+      id: "request-new-turn",
+      method: "item/commandExecution/requestApproval",
+      params: {
+        threadId: "thread-terminal-request",
+        turnId: "turn-new",
+      },
+    },
+    "2026-08-09T20:37:22.500Z",
+  );
+  const [waiting] = reducer.ingest(
+    {
+      method: "thread/status/changed",
+      params: {
+        threadId: "thread-terminal-request",
+        status: { type: "active", activeFlags: ["waitingOnApproval"] },
+      },
+    },
+    "2026-08-09T20:37:23.000Z",
+  );
+
+  assert.equal(waiting.turnId, null);
+  assert.equal(waiting.state, "waitingForApproval");
+  assert.equal(waiting.source.correlation, "statusFlagAndPendingRequest");
+  assert.equal(waiting.source.pendingRequestCount, 1);
+  assertStatusRecords([waiting]);
+});
+
+test("ignores tombstoned activity when measuring a new active cycle", () => {
+  const reducer = new StatusReducer({ staleAfterMs: 5_000 });
+  reducer.ingest(
+    {
+      method: "turn/started",
+      params: {
+        threadId: "thread-terminal-activity",
+        turn: { id: "turn-old", status: "inProgress", items: [] },
+      },
+    },
+    "2026-08-09T20:37:30.000Z",
+  );
+  reducer.ingest(
+    {
+      method: "turn/completed",
+      params: {
+        threadId: "thread-terminal-activity",
+        turn: { id: "turn-old", status: "completed", items: [] },
+      },
+    },
+    "2026-08-09T20:37:31.000Z",
+  );
+  reducer.ingest(
+    {
+      method: "thread/status/changed",
+      params: {
+        threadId: "thread-terminal-activity",
+        status: { type: "active", activeFlags: [] },
+      },
+    },
+    "2026-08-09T20:37:32.000Z",
+  );
+  assert.deepEqual(
+    reducer.ingest(
+      {
+        method: "item/commandExecution/terminalInteraction",
+        params: {
+          threadId: "thread-terminal-activity",
+          turnId: "turn-old",
+          stdin: "SENSITIVE_REPLAYED_INPUT",
+        },
+      },
+      "2026-08-09T20:37:36.000Z",
+    ),
+    [],
+  );
+
+  const [stale] = reducer.sweep("2026-08-09T20:37:37.000Z");
+  assert.equal(stale.state, "stale");
+  assert.equal(stale.turnId, null);
+  assert.equal(JSON.stringify(stale).includes("SENSITIVE_REPLAYED_INPUT"), false);
+  assertStatusRecords([stale]);
 });
 
 test("rejects timestamps outside the RFC 3339 contract before state mutation", () => {

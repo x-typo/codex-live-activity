@@ -16,7 +16,8 @@ and fixtures as conformance inputs.
 The test suite validates emitted records by evaluating every JSON Schema keyword
 used in that v1 contract and fails closed if a new unsupported keyword appears.
 This dependency-free test helper is scoped to the repository schema vocabulary;
-it is not presented as a general Draft 2020-12 implementation.
+it supports only boolean `additionalProperties` and is not presented as a general
+Draft 2020-12 implementation.
 
 ## Supported inputs
 
@@ -35,12 +36,17 @@ The primary source is the stable Codex App Server stream:
   map active observations to `disconnected`.
 - A local timer maps only a `running` task to `stale` after no supported signal
   is seen. Confirmed approval and input waits do not silently lose attention.
-- Documented `item/started`, `item/completed`, item-delta, MCP progress, and
-  file-change patch notifications for the matching running turn refresh only its
-  private liveness timestamp. They emit no record while the task is already
-  running, and their item, text, reasoning, command, diff, path, and output
-  payloads are discarded. Matching activity after a stale timeout emits one
-  generic `turn/activity` recovery record without retaining the event body.
+- Documented `item/started`, `item/completed`, item-delta, command terminal
+  interaction, MCP progress, and file-change patch notifications for the matching
+  running turn refresh only its private liveness timestamp. They emit no record
+  while the task is already running, and their item, text, reasoning, command,
+  diff, path, and output payloads are discarded. Matching activity after a stale
+  timeout emits one generic `turn/activity` recovery record without retaining the
+  event body.
+- An `active` thread status after a terminal turn clears the published turn
+  correlation until the next turn event. A bounded private history of the 64 most
+  recent terminal identifiers rejects replayed starts, activity, approval
+  requests, and completions for prior turns.
 
 An App Server approval request is retained only as an opaque correlation ID. It
 does not produce attention by itself. Attention begins only when the matching

@@ -38,6 +38,13 @@ function assertSupportedNode(schema, path) {
     }
   }
 
+  if (
+    schema.additionalProperties !== undefined &&
+    typeof schema.additionalProperties !== "boolean"
+  ) {
+    throw new TypeError(`${path}.additionalProperties must be a boolean`);
+  }
+
   for (const [name, propertySchema] of Object.entries(schema.properties ?? {})) {
     assertSupportedNode(propertySchema, `${path}.properties.${name}`);
   }
