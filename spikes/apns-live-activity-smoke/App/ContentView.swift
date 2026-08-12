@@ -10,6 +10,7 @@ final class SmokeActivityModel: ObservableObject {
 
     private var activity: Activity<SmokeActivityAttributes>?
     private var tokenTask: Task<Void, Never>?
+    private var stateTask: Task<Void, Never>?
 
     var canStart: Bool { activity == nil }
 
@@ -40,6 +41,7 @@ final class SmokeActivityModel: ObservableObject {
             pushToken = nil
             errorMessage = nil
             observePushToken(for: activity)
+            observeState(for: activity)
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -63,25 +65,53 @@ final class SmokeActivityModel: ObservableObject {
             ActivityContent(state: finalState, staleDate: nil),
             dismissalPolicy: .immediate
         )
-        tokenTask?.cancel()
-        tokenTask = nil
-        self.activity = nil
-        activityID = nil
-        pushToken = nil
+        clearActivity(matching: activity.id)
+    }
+
+    func reconcileActivityState() {
+        guard let activity else { return }
+        if activity.activityState == .ended || activity.activityState == .dismissed {
+            clearActivity(matching: activity.id)
+        }
     }
 
     private func observePushToken(for activity: Activity<SmokeActivityAttributes>) {
         tokenTask?.cancel()
         tokenTask = Task { @MainActor [weak self] in
             for await tokenData in activity.pushTokenUpdates {
-                guard !Task.isCancelled else { return }
+                guard !Task.isCancelled, self?.activity?.id == activity.id else { return }
                 self?.pushToken = tokenData.map { String(format: "%02x", $0) }.joined()
             }
         }
     }
+
+    private func observeState(for activity: Activity<SmokeActivityAttributes>) {
+        stateTask?.cancel()
+        stateTask = Task { @MainActor [weak self] in
+            for await state in activity.activityStateUpdates {
+                guard !Task.isCancelled else { return }
+                if state == .ended || state == .dismissed {
+                    self?.clearActivity(matching: activity.id)
+                    return
+                }
+            }
+        }
+    }
+
+    private func clearActivity(matching id: String) {
+        guard activity?.id == id else { return }
+        tokenTask?.cancel()
+        stateTask?.cancel()
+        tokenTask = nil
+        stateTask = nil
+        activity = nil
+        activityID = nil
+        pushToken = nil
+    }
 }
 
 struct ContentView: View {
+    @Environment(\.scenePhase) private var scenePhase
     @StateObject private var model = SmokeActivityModel()
 
     var body: some View {
@@ -134,6 +164,14 @@ struct ContentView: View {
                 }
             }
             .navigationTitle("APNs Smoke")
+            .onAppear {
+                model.reconcileActivityState()
+            }
+            .onChange(of: scenePhase) { _, phase in
+                if phase == .active {
+                    model.reconcileActivityState()
+                }
+            }
         }
     }
 }

@@ -25,10 +25,10 @@ const STATES = {
 };
 
 export function buildSmokePayload(kind, timestamp = Math.floor(Date.now() / 1000)) {
-  const definition = STATES[kind];
-  if (!definition) {
+  if (!Object.hasOwn(STATES, kind)) {
     throw new TypeError(`kind must be one of: ${Object.keys(STATES).join(", ")}`);
   }
+  const definition = STATES[kind];
   if (!Number.isSafeInteger(timestamp) || timestamp <= 0) {
     throw new TypeError("timestamp must be a positive integer in epoch seconds");
   }

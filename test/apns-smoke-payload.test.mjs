@@ -38,6 +38,12 @@ test("renders deterministic allowlisted APNs Live Activity states", () => {
 
 test("rejects unknown states and invalid timestamps", () => {
   assert.throws(() => buildSmokePayload("running", 1), /kind must be one of/);
+  for (const inheritedName of ["constructor", "toString", "__proto__"]) {
+    assert.throws(
+      () => buildSmokePayload(inheritedName, 1),
+      /kind must be one of/,
+    );
+  }
   assert.throws(() => buildSmokePayload("ready", 0), /positive integer/);
   assert.throws(() => buildSmokePayload("ready", 1.5), /positive integer/);
 });
