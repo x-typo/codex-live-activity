@@ -1,0 +1,12 @@
+{"observedAt":"2026-08-12T20:00:00.000Z","message":{"method":"thread/started","params":{"thread":{"id":"thread-relay","name":"SENSITIVE_THREAD_NAME","preview":"SENSITIVE_PREVIEW","status":{"type":"idle"}}}}}
+{"observedAt":"2026-08-12T20:00:00.500Z","message":{"method":"turn/started","params":{"threadId":"thread-other","turn":{"id":"turn-other","status":"inProgress","items":[{"type":"userMessage","content":"SENSITIVE_OTHER_TASK"}]}}}}
+{"observedAt":"2026-08-12T20:00:01.000Z","message":{"method":"turn/started","params":{"threadId":"thread-relay","turn":{"id":"turn-relay","status":"inProgress","items":[{"type":"userMessage","content":"SENSITIVE_PROMPT"}]}}}}
+{"observedAt":"2026-08-12T20:00:02.000Z","message":{"id":"approval-relay","method":"item/commandExecution/requestApproval","params":{"threadId":"thread-relay","turnId":"turn-relay","itemId":"item-relay","command":"SENSITIVE_COMMAND","cwd":"/SENSITIVE/CWD","reason":"SENSITIVE_REASON"}}}
+{"observedAt":"2026-08-12T20:00:03.000Z","message":{"method":"thread/status/changed","params":{"threadId":"thread-relay","status":{"type":"active","activeFlags":["waitingOnApproval","SENSITIVE_UNKNOWN_FLAG"]}}}}
+{"observedAt":"2026-08-12T20:00:04.000Z","message":{"method":"serverRequest/resolved","params":{"threadId":"thread-relay","requestId":"approval-relay","response":"SENSITIVE_RESPONSE"}}}
+{"observedAt":"2026-08-12T20:00:05.000Z","message":{"method":"thread/status/changed","params":{"threadId":"thread-relay","status":{"type":"active","activeFlags":[]}}}}
+{"observedAt":"2026-08-12T20:00:06.000Z","message":{"id":"input-relay","method":"item/tool/requestUserInput","params":{"threadId":"thread-relay","turnId":"turn-relay","itemId":"item-input","isBlocking":true,"questions":[{"question":"SENSITIVE_QUESTION"}]}}}
+{"observedAt":"2026-08-12T20:00:07.000Z","message":{"method":"thread/status/changed","params":{"threadId":"thread-relay","status":{"type":"active","activeFlags":["waitingOnUserInput"]}}}}
+{"observedAt":"2026-08-12T20:00:08.000Z","message":{"method":"serverRequest/resolved","params":{"threadId":"thread-relay","requestId":"input-relay"}}}
+{"observedAt":"2026-08-12T20:00:09.000Z","message":{"method":"thread/status/changed","params":{"threadId":"thread-relay","status":{"type":"active","activeFlags":[]}}}}
+{"observedAt":"2026-08-12T20:00:10.000Z","message":{"method":"turn/completed","params":{"threadId":"thread-relay","turn":{"id":"turn-relay","status":"completed","items":[{"type":"agentMessage","text":"SENSITIVE_ASSISTANT_OUTPUT"}]}}}}

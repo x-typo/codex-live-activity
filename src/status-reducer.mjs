@@ -460,7 +460,7 @@ export class StatusReducer {
     const task = this.tasks.get(threadId);
     if (!task || !["running", "stale"].includes(task.state)) return [];
     if (task.terminalTurnIds.has(turnId)) return [];
-    if (task.turnId !== null && task.turnId !== turnId) return [];
+    if (task.turnId !== turnId) return [];
     if (task.state === "stale") {
       return [
         this.#transition(task, "running", observedAtMs, {

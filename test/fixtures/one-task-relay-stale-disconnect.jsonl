@@ -1,0 +1,4 @@
+{"observedAt":"2026-08-12T20:10:00.000Z","message":{"method":"turn/started","params":{"threadId":"thread-relay","turn":{"id":"turn-stale","status":"inProgress","items":[]}}}}
+{"observedAt":"2026-08-12T20:10:06.000Z","control":"sweep"}
+{"observedAt":"2026-08-12T20:10:07.000Z","message":{"method":"item/mcpToolCall/progress","params":{"threadId":"thread-relay","turnId":"turn-stale","itemId":"item-stale","message":"SENSITIVE_MCP_PROGRESS","arguments":{"secret":"SENSITIVE_ARGUMENT"}}}}
+{"observedAt":"2026-08-12T20:10:08.000Z","control":"disconnect"}
