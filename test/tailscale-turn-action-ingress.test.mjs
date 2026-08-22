@@ -272,6 +272,29 @@ test("authorized Reply forwards text only to the private boundary and redacts it
   assert.equal(persisted.includes("turn-active"), false);
 });
 
+test("schema and runtime accept emoji and reject unpaired surrogates", async () => {
+  const emojiAction = remoteReply({
+    actionId: "remote-reply-emoji-1",
+    text: "synthetic reply 😀",
+  });
+  assert.deepEqual(validateJsonSchema(emojiAction, remoteActionSchema), []);
+  const emojiState = createHarness();
+  const emojiResult = await emojiState.handler(requestFor(emojiAction));
+  assert.equal(emojiResult.statusCode, 200);
+  assert.equal(emojiState.requests[0].params.input[0].text, emojiAction.text);
+
+  const invalidAction = remoteReply({
+    actionId: "remote-reply-surrogate-1",
+    text: "synthetic reply \ud800",
+  });
+  assert.notDeepEqual(validateJsonSchema(invalidAction, remoteActionSchema), []);
+  const invalidState = createHarness();
+  const invalidResult = await invalidState.handler(requestFor(invalidAction));
+  assert.equal(invalidResult.statusCode, 400);
+  assert.equal(receiptFrom(invalidResult).reason, "invalidAction");
+  assert.deepEqual(invalidState.requests, []);
+});
+
 test("requires both Tailscale capability and paired app authorization", async () => {
   const missingCapability = createHarness();
   const headersWithoutCapability = {
@@ -355,18 +378,22 @@ test("runtime freshness checks preserve the RFC 3339 schema boundary", async () 
   assert.equal(receiptFrom(calendarResult).reason, "invalidRequest");
   assert.deepEqual(invalidCalendar.replayStore.inspectCalls, []);
 
+  const lowercaseDateAction = remoteStop({
+    actionId: "remote-stop-lowercase-date-1",
+    issuedAt: "2026-08-22t20:00:00.000z",
+    expiresAt: "2026-08-22t20:01:00.000z",
+  });
+  assert.notDeepEqual(
+    validateJsonSchema(lowercaseDateAction, remoteActionSchema),
+    [],
+  );
   const lowercaseDate = createHarness();
   const lowercaseResult = await lowercaseDate.handler(
-    requestFor(
-      remoteStop({
-        actionId: "remote-stop-lowercase-date-1",
-        issuedAt: "2026-08-22t20:00:00.000z",
-        expiresAt: "2026-08-22t20:01:00.000z",
-      }),
-    ),
+    requestFor(lowercaseDateAction),
   );
-  assert.equal(lowercaseResult.statusCode, 200);
-  assert.equal(receiptFrom(lowercaseResult).outcome, "accepted");
+  assert.equal(lowercaseResult.statusCode, 400);
+  assert.equal(receiptFrom(lowercaseResult).reason, "invalidRequest");
+  assert.deepEqual(lowercaseDate.replayStore.inspectCalls, []);
 
   const oversizedWindow = createHarness();
   const windowResult = await oversizedWindow.handler(

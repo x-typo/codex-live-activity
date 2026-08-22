@@ -63,7 +63,7 @@ function isPrivateIdentifier(value) {
 
 function parseRfc3339DateTime(value) {
   const match = value.match(
-    /^(\d{4})-(\d{2})-(\d{2})[Tt](\d{2}):(\d{2}):(\d{2})(?:\.\d+)?(?:[Zz]|[+-](\d{2}):(\d{2}))$/u,
+    /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d+)?(?:Z|[+-](\d{2}):(\d{2}))$/u,
   );
   if (match === null) return Number.NaN;
 
