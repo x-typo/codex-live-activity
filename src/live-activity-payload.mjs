@@ -42,8 +42,31 @@ const PRESENTATION = Object.freeze({
   },
 });
 
+const APS_KEYS = Object.freeze([
+  "content-state",
+  "event",
+  "stale-date",
+  "timestamp",
+]);
+const CONTENT_STATE_KEYS = Object.freeze([
+  "attentionRequired",
+  "detail",
+  "marker",
+  "sequence",
+  "status",
+]);
+
 function isObject(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function hasExactKeys(value, expectedKeys) {
+  if (!isObject(value)) return false;
+  const keys = Object.keys(value).sort();
+  return (
+    keys.length === expectedKeys.length &&
+    keys.every((key, index) => key === expectedKeys[index])
+  );
 }
 
 function defaultTimestamp(record) {
@@ -92,7 +115,7 @@ export function buildLiveActivityPayload(
     throw new TypeError("record attention does not match its lifecycle state");
   }
 
-  return {
+  const payload = {
     aps: {
       timestamp,
       event: "update",
@@ -105,5 +128,62 @@ export function buildLiveActivityPayload(
       },
       "stale-date": staleDate,
     },
+  };
+  validateLiveActivityPayload(payload);
+  return payload;
+}
+
+export function validateLiveActivityPayload(
+  payload,
+  { previousSequence = 0 } = {},
+) {
+  if (!hasExactKeys(payload, ["aps"]) || !hasExactKeys(payload.aps, APS_KEYS)) {
+    throw new TypeError("payload must use the exact relay APNs update shape");
+  }
+
+  const aps = payload.aps;
+  const contentState = aps["content-state"];
+  if (!hasExactKeys(contentState, CONTENT_STATE_KEYS)) {
+    throw new TypeError("payload content state must use the exact relay allowlist");
+  }
+  if (aps.event !== "update") {
+    throw new TypeError("relay payload event must be update");
+  }
+  if (!Number.isSafeInteger(aps.timestamp) || aps.timestamp <= 0) {
+    throw new TypeError("relay payload timestamp must be a positive safe integer");
+  }
+  if (
+    !Number.isSafeInteger(aps["stale-date"]) ||
+    aps["stale-date"] <= aps.timestamp
+  ) {
+    throw new TypeError("relay payload stale date must follow its timestamp");
+  }
+  if (
+    !Number.isSafeInteger(previousSequence) ||
+    previousSequence < 0 ||
+    !Number.isSafeInteger(contentState.sequence) ||
+    contentState.sequence <= previousSequence
+  ) {
+    throw new TypeError("relay payload sequence must increase");
+  }
+  if (contentState.marker !== RELAY_MARKER) {
+    throw new TypeError("relay payload marker is invalid");
+  }
+
+  const presentation = Object.values(PRESENTATION).find(
+    ({ status }) => status === contentState.status,
+  );
+  if (
+    presentation === undefined ||
+    contentState.detail !== presentation.detail ||
+    contentState.attentionRequired !== presentation.attentionRequired
+  ) {
+    throw new TypeError("relay payload presentation is invalid");
+  }
+
+  return {
+    attentionRequired: contentState.attentionRequired,
+    sequence: contentState.sequence,
+    status: contentState.status,
   };
 }
