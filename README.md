@@ -98,6 +98,72 @@ durable replay defense. A later return-path decision must separately define
 authentication, expiry, replay protection, task capability correlation, and
 unavailable behavior before any listener or device action is added.
 
+## Selected private return path (mock only)
+
+The selected return transport is tailnet-only HTTPS through
+[Tailscale Serve](https://tailscale.com/docs/features/tailscale-serve), ending at
+a future action-ingress sidecar that listens only on `127.0.0.1`. Tailscale
+Funnel, a public tunnel, direct LAN or tailnet binding, and remote exposure of
+Codex App Server are outside this design. App Server remains a private local
+stdio child behind the existing one-task relay.
+
+The intended path is:
+
+```text
+iPhone app / LiveActivityIntent
+  -> HTTPS through tailnet-only Tailscale Serve
+  -> localhost-only authenticated Mac ingress sidecar
+  -> injected one-task action boundary
+  -> Codex App Server over stdio
+```
+
+[`schema/relay-remote-action.v1.schema.json`](schema/relay-remote-action.v1.schema.json)
+defines the phone-facing wire envelope. It carries an opaque, short-lived
+`controlContextId` instead of a Codex thread ID or turn ID:
+
+```json
+{
+  "schemaVersion": 1,
+  "actionId": "remote-reply-1",
+  "controlContextId": "context-active-1",
+  "issuedAt": "2026-08-22T20:00:00.000Z",
+  "expiresAt": "2026-08-22T20:01:00.000Z",
+  "action": "reply",
+  "text": "Please continue with the safe option."
+}
+```
+
+`src/tailscale-turn-action-ingress.mjs` is a pure, injected request handler. It
+opens no socket and changes no Tailscale state. Before resolving a context, it
+requires both a forwarded `Tailscale-App-Capabilities` grant and a paired
+per-install app-token verifier. A live adapter must keep that token in the
+iPhone and Mac Keychains; it must never place it in APNs, a URL, this repository,
+or a log.
+
+The Mac privately maps a valid context to the exact owned thread and expected
+active turn, then passes the reconstructed action through the already-proved
+mock boundary. The context expires independently of ActivityKit stale display
+state and must be revoked on terminal, close, or disconnect lifecycle. This
+prevents a control rendered for an old turn from targeting a newer turn.
+
+The handler also requires an injected atomic replay store and keyed-HMAC request
+fingerprinting. The durable record is limited to installation ID, action ID,
+fingerprint, expiry, and a content-free receipt. Identical completed retries
+return that receipt; conflicting reuse rejects; an incomplete claim is reported
+as outcome unknown and is never automatically dispatched again. No Reply text,
+app token, control context, thread ID, turn ID, or raw error enters the replay
+record or response. A live sidecar must generate the HMAC key from at least 32
+bytes of cryptographically secure randomness, retain it only in owner-private
+Mac credential storage, and keep it stable through the replay-retention horizon.
+
+This remains a contract proof, not a runnable service. It includes no listener,
+durable-store implementation, token provisioning, Tailscale install or policy,
+Swift control, context issuance, background daemon, live App Server wiring, or
+phone action. Stop's future App Intent authentication policy is also unselected;
+iOS defaults an App Intent to `alwaysAllowed`, so the physical Stop control must
+explicitly require authentication before it can be treated as lock-screen-safe.
+Those are separately gated phases.
+
 ## Direct APNs sender boundary
 
 The sender is a separate process so Apple credentials and the per-activity token

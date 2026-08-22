@@ -1,0 +1,106 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/x-typo/codex-live-activity/schema/relay-remote-action.v1.schema.json",
+  "title": "One-task relay remote turn action v1",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/stop"
+    },
+    {
+      "$ref": "#/$defs/reply"
+    }
+  ],
+  "$defs": {
+    "actionId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}(?![\\s\\S])"
+    },
+    "controlContextId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}(?![\\s\\S])"
+    },
+    "issuedAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "expiresAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "stop": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schemaVersion",
+        "actionId",
+        "controlContextId",
+        "issuedAt",
+        "expiresAt",
+        "action"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "const": 1
+        },
+        "actionId": {
+          "$ref": "#/$defs/actionId"
+        },
+        "controlContextId": {
+          "$ref": "#/$defs/controlContextId"
+        },
+        "issuedAt": {
+          "$ref": "#/$defs/issuedAt"
+        },
+        "expiresAt": {
+          "$ref": "#/$defs/expiresAt"
+        },
+        "action": {
+          "const": "stop"
+        }
+      }
+    },
+    "reply": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schemaVersion",
+        "actionId",
+        "controlContextId",
+        "issuedAt",
+        "expiresAt",
+        "action",
+        "text"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "const": 1
+        },
+        "actionId": {
+          "$ref": "#/$defs/actionId"
+        },
+        "controlContextId": {
+          "$ref": "#/$defs/controlContextId"
+        },
+        "issuedAt": {
+          "$ref": "#/$defs/issuedAt"
+        },
+        "expiresAt": {
+          "$ref": "#/$defs/expiresAt"
+        },
+        "action": {
+          "const": "reply"
+        },
+        "text": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096,
+          "pattern": "^(?![\\s\\S]*[\\uD800-\\uDFFF])(?=[\\s\\S]*\\S)"
+        }
+      }
+    }
+  }
+}
