@@ -378,7 +378,7 @@ export function createLocalhostTurnActionListener({
 
   const start = ({ port = 0 } = {}) => {
     validatePort(port);
-    if (closed) throw new Error("listener is closed");
+    if (closing || closed) throw new Error("listener is closing or closed");
     if (startCalled) throw new Error("listener start may be called only once");
     startCalled = true;
     startPromise = new Promise((resolve, reject) => {

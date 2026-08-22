@@ -449,6 +449,23 @@ test("close stops acceptance, revokes controls, and lets an active handler finis
   assert.deepEqual(events, ["handler-started", "revoked", "handler-finished"]);
 });
 
+test("close prevents reentrant and later listener startup", async () => {
+  let listener;
+  let reentrantStartRejected = false;
+  listener = createLocalhostTurnActionListener({
+    handleRequest: async () => ingressResponse(),
+    revokeControlContexts: () => {
+      assert.throws(() => listener.start(), /closing|closed/u);
+      reentrantStartRejected = true;
+    },
+  });
+
+  await listener.close();
+  assert.equal(reentrantStartRejected, true);
+  assert.equal(listener.listening, false);
+  assert.throws(() => listener.start(), /closing|closed/u);
+});
+
 test("a failed fixed-port bind does not fall back to another listener", async () => {
   const first = createLocalhostTurnActionListener({
     handleRequest: async () => ingressResponse(),
