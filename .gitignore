@@ -4,3 +4,11 @@ node_modules/
 coverage/
 *.log
 smoke-output*.jsonl
+*.p8
+*.p12
+*.pem
+*.mobileprovision
+.env
+.env.*
+apns-config*.json
+activity-token*

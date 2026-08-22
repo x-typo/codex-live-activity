@@ -232,3 +232,52 @@ bodies are drained without being forwarded or persisted. `SIGINT` and `SIGTERM`
 initiate the same child-stop and verified temporary-state cleanup path before the
 relay exits with the conventional signal status. A broken dry-run stdout also
 stops the child and runs the same cleanup path.
+
+## Direct APNs delivery boundary
+
+Direct delivery is implemented as a second process, not as a credential-bearing
+transport inside `OneTaskRelay`:
+
+```text
+task input -> one-task relay -> redacted JSONL -> APNs sender -> Apple APNs
+```
+
+The relay side is unchanged and remains safe to run as a JSONL dry run. The APNs
+sender receives no prompt, App Server event, thread or turn identifier, Codex
+environment, or child process handle. Its only input is the exact allowlisted
+ActivityKit body produced by `src/live-activity-payload.mjs`.
+
+`src/apns-live-activity-http2.mjs` validates that body a second time, loads one
+owner-private configuration, signing key, and ActivityKit token from regular
+non-symlink files outside the repository, creates an in-memory ES256 provider
+JWT, and posts over Node's built-in HTTP/2 client. The environment selects one of
+two fixed Apple authorities; callers cannot supply a URL, topic, header, raw APNs
+body, key value, bearer token, or ActivityKit token through arguments or
+environment variables. The topic is always the configured main bundle ID plus
+`.push-type.liveactivity`.
+
+The sender preserves input ordering and stops after the first input, protocol,
+transport, or APNs response failure. It has no redirects, proxy configuration,
+retry queue, disk cache, hosted service, or automatic token repair. Its stdout
+contains only content-free acceptance/coalescing receipts; its errors contain
+only allowlisted APNs reason names and status codes.
+
+To avoid spending the ActivityKit push budget on App Server item noise, repeated
+presentations are coalesced until half of the prior stale interval has elapsed.
+A state change is sent immediately, subject to a short serialization delay when
+needed to keep ActivityKit's integer-second timestamps current and strictly
+increasing. Working and stale refreshes use APNs priority `5`; approval/input,
+ready, blocked, and disconnected states use priority `10`. Every first-proof
+request uses `apns-expiration: 0`, so APNs makes a delivery attempt without
+storing a stale task update.
+
+All relay payloads still use ActivityKit event `update`. Direct delivery does not
+choose the product's `end` event, dismissal, unread retention, or reconnect
+policy. The first physical working-to-ready proof passed without expanding that
+boundary. Terminal lifecycle behavior remains a separate product-policy phase;
+in particular, a fixed dismissal timer must not be described as unread retention
+without an acknowledgement contract.
+
+The request contract and protected live procedure are documented in
+`docs/direct-apns-delivery.md`. Deterministic tests use an in-memory HTTP/2 stream
+double and synthetic P-256 key; they never open a socket or contact Apple.
