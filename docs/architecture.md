@@ -236,6 +236,115 @@ The bounded recent-ID set is not a security claim. Authentication, expiry,
 durable replay defense, task-scoped capabilities, and unavailable behavior
 belong to the separately selected return transport.
 
+### Selected iPhone-to-Mac return transport
+
+The selected transport is tailnet-only HTTPS through Tailscale Serve to an
+action-ingress sidecar bound only to literal `127.0.0.1`. Serve terminates HTTPS
+and reverse-proxies to that loopback backend. Tailscale Funnel stays disabled;
+the ingress never binds a wildcard, LAN address, Tailscale address, or public
+address. Codex App Server is not the network server and remains behind the relay
+on its supported local stdio boundary.
+
+```text
+iPhone app / LiveActivityIntent
+  -> HTTPS through Tailscale Serve on the private tailnet
+  -> http://127.0.0.1:<ephemeral-or-owner-selected-port>
+  -> authenticated action-ingress sidecar
+  -> owner-only injected call or Unix socket
+  -> one-task relay
+  -> Codex App Server stdio
+```
+
+Serve supplies encrypted private connectivity, tailnet identity and policy
+admission, HTTPS termination, and sanitized forwarded capability metadata. It
+does not prove that the request came from this companion app installation, that
+the displayed control still targets the same turn, that an action is fresh or
+not replayed, that App Server accepted it, or that the Mac is reachable.
+Accordingly, the sidecar must require both:
+
+- the expected app capability in Tailscale's forwarded
+  `Tailscale-App-Capabilities` JSON header; and
+- a paired per-install bearer verified against owner-private Mac state, with the
+  phone copy held in Keychain.
+
+The capability header is trusted only behind Serve and a loopback-only backend.
+A local process could forge that header when calling the backend directly, so
+the paired app credential remains an independent application boundary. Neither
+credential may enter APNs, ActivityKit state, deep-link URLs, logs, analytics,
+the repository, or the relay/App Server environment.
+
+#### Remote action envelope and private correlation
+
+The phone-facing v1 envelope is
+`schema/relay-remote-action.v1.schema.json`. It contains only an action ID, an
+opaque non-secret `controlContextId`, issued and expiry timestamps, the exact
+Stop or Reply action, and Reply text when applicable. It never contains the
+private Codex thread ID or turn ID.
+
+The Mac resolves a context to one exact `(ownedThreadId, expectedTurnId)` pair
+and the existing `MockOneTaskTurnActionBoundary`. A valid context is short-lived,
+rotated for a new turn, and revoked on matching terminal completion, owned-thread
+close, or App Server disconnect. ActivityKit `stale-date` and the displayed
+`stale` state are presentation signals only; neither authorizes a control.
+
+The pure request handler in `src/tailscale-turn-action-ingress.mjs` applies a
+60-second maximum request validity window with 30 seconds of future clock-skew
+tolerance by default. It also checks the separately stored context expiry. These
+prototype constants can be revisited with physical-device timing evidence, but
+the independent request and context checks are required architecture.
+
+Adding the opaque context to the iPhone/ActivityKit flow is a later protected
+schema and privacy decision. Until its issuance and authenticated provisioning
+are proved, no executable listener may be wired to the relay.
+
+#### Durable replay, receipts, and unavailability
+
+The ingress requires an injected replay store with an atomic claim-before-send
+contract. Its key is the verified installation ID plus action ID. Its value is a
+keyed-HMAC fingerprint of the canonical request, the request expiry, and the
+eventual content-free receipt. A plain reply-text hash is not retained because
+guessable text could be recovered by comparison. The live sidecar must generate
+the HMAC key from at least 32 bytes of cryptographically secure randomness,
+retain it only in owner-private Mac credential storage, and keep it stable for
+at least the replay-retention horizon.
+
+- same ID and same fingerprint after completion returns the stored receipt;
+- same ID and a different fingerprint rejects as `replayConflict`;
+- a claimed action without a committed receipt returns `outcomeUnknown` and is
+  not dispatched again; and
+- a receipt-commit failure after dispatch also returns `outcomeUnknown` and
+  must not trigger an automatic second send.
+
+An accepted Stop receipt means only that `turn/interrupt` was accepted. The
+matching `turn/completed` lifecycle with terminal status `interrupted` proves
+the effect. Reply acceptance still requires `turn/steer` to return the same
+private turn ID. All network receipts project only schema version, safe action
+ID, action kind, outcome, and an allowlisted reason.
+
+There is no server or cloud command queue. If the Mac, Tailscale, ingress, replay
+store, or App Server is unavailable, the phone reports not delivered or outcome
+unknown. It may retry only the same action ID while the request remains valid;
+it never optimistically displays a stopped task. Unsent Reply text stays only in
+the foreground composer unless encrypted draft retention is separately chosen.
+
+The current implementation proves this contract with an injected deterministic
+store but intentionally supplies no production durable-store implementation,
+network listener, credential storage, context issuer, Tailscale configuration,
+Swift UI, App Intent, or live App Server integration.
+
+An App Intent's authentication policy defaults to `alwaysAllowed`, including
+when the device is locked. The future Stop `LiveActivityIntent` must therefore
+set `requiresAuthentication` explicitly before this project can treat the
+Lock Screen control as authenticated. Reply should open a focused task-scoped
+composer and submit from the foreground app, not attempt inline free-text entry
+on the Live Activity.
+
+Alternatives remain deliberately bounded. LAN-only transport fails away from
+home. CloudKit private records add offline queueing but also durable reply
+content, synchronization, deletion, and replay complexity that this project
+does not require. A public tunnel or Funnel expands attack surface without
+removing any app-layer requirement, and direct public exposure is rejected.
+
 ### Ordering, stale state, and terminal policy
 
 The existing reducer rejects old-turn activity and completion by turn
