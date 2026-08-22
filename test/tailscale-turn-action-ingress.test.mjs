@@ -300,6 +300,21 @@ test("requires both Tailscale capability and paired app authorization", async ()
   assert.deepEqual(wrongToken.replayStore.claimCalls, []);
 });
 
+test("accepts a case-insensitive Bearer authorization scheme", async () => {
+  const state = createHarness();
+  const request = requestFor(
+    remoteStop({ actionId: "remote-stop-lowercase-bearer-1" }),
+  );
+  request.headers.authorization = `bearer   ${APP_TOKEN}`;
+
+  const result = await state.handler(request);
+
+  assert.equal(result.statusCode, 200);
+  assert.equal(receiptFrom(result).outcome, "accepted");
+  assert.equal(state.authorizationCalls, 1);
+  assert.equal(state.requests.length, 1);
+});
+
 test("rejects expired requests and unknown or expired control contexts", async () => {
   const expiredRequest = createHarness();
   const requestResult = await expiredRequest.handler(
@@ -339,6 +354,19 @@ test("runtime freshness checks preserve the RFC 3339 schema boundary", async () 
   );
   assert.equal(receiptFrom(calendarResult).reason, "invalidRequest");
   assert.deepEqual(invalidCalendar.replayStore.inspectCalls, []);
+
+  const lowercaseDate = createHarness();
+  const lowercaseResult = await lowercaseDate.handler(
+    requestFor(
+      remoteStop({
+        actionId: "remote-stop-lowercase-date-1",
+        issuedAt: "2026-08-22t20:00:00.000z",
+        expiresAt: "2026-08-22t20:01:00.000z",
+      }),
+    ),
+  );
+  assert.equal(lowercaseResult.statusCode, 200);
+  assert.equal(receiptFrom(lowercaseResult).outcome, "accepted");
 
   const oversizedWindow = createHarness();
   const windowResult = await oversizedWindow.handler(
@@ -451,7 +479,7 @@ test("a failed receipt commit never causes an automatic second dispatch", async 
   assert.equal(state.requests.length, 1);
 });
 
-test("malformed, expanded, oversized, and wrong-route requests fail before dispatch", async () => {
+test("malformed, expanded, unsupported, oversized, and wrong-route requests fail before dispatch", async () => {
   const state = createHarness();
   const malformed = await state.handler(
     requestFor(remoteStop(), { body: "{not-json" }),
@@ -464,6 +492,12 @@ test("malformed, expanded, oversized, and wrong-route requests fail before dispa
   );
   assert.equal(receiptFrom(expanded).reason, "invalidAction");
 
+  const unsupported = await state.handler(
+    requestFor(remoteStop(), { body: { action: "stop" } }),
+  );
+  assert.equal(unsupported.statusCode, 400);
+  assert.equal(receiptFrom(unsupported).reason, "invalidRequest");
+
   const oversized = await state.handler(
     requestFor(remoteStop(), { body: "x".repeat(MAX_REMOTE_ACTION_BODY_BYTES + 1) }),
   );
@@ -475,6 +509,36 @@ test("malformed, expanded, oversized, and wrong-route requests fail before dispa
   assert.equal(wrongRoute.statusCode, 404);
   assert.deepEqual(state.requests, []);
   assert.deepEqual(state.replayStore.claimCalls, []);
+});
+
+test("accepts the JSON charset parameter and rejects malformed media types", async () => {
+  const state = createHarness();
+  const request = requestFor(
+    remoteStop({ actionId: "remote-stop-content-type-1" }),
+  );
+  request.headers["content-type"] = "Application/JSON; charset=utf-8";
+
+  const result = await state.handler(request);
+
+  assert.equal(result.statusCode, 200);
+  assert.equal(receiptFrom(result).outcome, "accepted");
+  assert.equal(state.requests.length, 1);
+
+  for (const contentType of [
+    "application/json; charset",
+    "application/json; charset = utf-8",
+    "application/jsonp",
+    "application/jſon",
+  ]) {
+    const rejectedState = createHarness();
+    const rejectedRequest = requestFor(remoteStop());
+    rejectedRequest.headers["content-type"] = contentType;
+    const rejectedResult = await rejectedState.handler(rejectedRequest);
+    assert.equal(rejectedResult.statusCode, 400);
+    assert.equal(receiptFrom(rejectedResult).reason, "invalidRequest");
+    assert.equal(rejectedState.authorizationCalls, 0);
+    assert.deepEqual(rejectedState.requests, []);
+  }
 });
 
 test("private boundary failures remain allowlisted and content-free", async () => {

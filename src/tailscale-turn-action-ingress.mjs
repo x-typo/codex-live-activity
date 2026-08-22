@@ -63,7 +63,7 @@ function isPrivateIdentifier(value) {
 
 function parseRfc3339DateTime(value) {
   const match = value.match(
-    /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d+)?(?:Z|[+-](\d{2}):(\d{2}))$/u,
+    /^(\d{4})-(\d{2})-(\d{2})[Tt](\d{2}):(\d{2}):(\d{2})(?:\.\d+)?(?:[Zz]|[+-](\d{2}):(\d{2}))$/u,
   );
   if (match === null) return Number.NaN;
 
@@ -133,14 +133,12 @@ function hasTailscaleCapability(header, expectedCapability) {
 }
 
 function parseAuthorization(value) {
-  if (
-    typeof value !== "string" ||
-    value.length > 4_096 ||
-    !value.startsWith("Bearer ")
-  ) {
+  if (typeof value !== "string" || value.length > 4_096) {
     return null;
   }
-  const token = value.slice("Bearer ".length);
+  const scheme = /^Bearer +/iu.exec(value);
+  if (scheme === null) return null;
+  const token = value.slice(scheme[0].length);
   return token.length > 0 && !/[\r\n]/u.test(token) ? token : null;
 }
 
@@ -148,6 +146,13 @@ function requestBodyBytes(body) {
   if (typeof body === "string") return Buffer.byteLength(body);
   if (body instanceof Uint8Array) return body.byteLength;
   return Number.NaN;
+}
+
+function hasJsonContentType(value) {
+  if (typeof value !== "string" || value.length > 256) return false;
+  return /^application\/json(?:[ \t]*;[ \t]*charset=(?:utf-8|"utf-8"))?[ \t]*$/i.test(
+    value,
+  );
 }
 
 function decodeRequestBody(body) {
@@ -437,10 +442,13 @@ export function createTailscaleTurnActionRequestHandler({
     }
 
     const bodyBytes = requestBodyBytes(request.body);
-    if (!Number.isFinite(bodyBytes) || bodyBytes > MAX_REMOTE_ACTION_BODY_BYTES) {
+    if (!Number.isFinite(bodyBytes)) {
+      return response(400, rejected("invalidRequest"));
+    }
+    if (bodyBytes > MAX_REMOTE_ACTION_BODY_BYTES) {
       return response(413, rejected("invalidRequest"));
     }
-    if (headerValue(request.headers, "content-type") !== "application/json") {
+    if (!hasJsonContentType(headerValue(request.headers, "content-type"))) {
       return response(400, rejected("invalidRequest"));
     }
     if (
