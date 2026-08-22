@@ -13,6 +13,7 @@ const SUPPORTED_KEYWORDS = new Set([
   "minLength",
   "minimum",
   "oneOf",
+  "pattern",
   "properties",
   "required",
   "title",
@@ -43,6 +44,16 @@ function assertSupportedNode(schema, path) {
     typeof schema.additionalProperties !== "boolean"
   ) {
     throw new TypeError(`${path}.additionalProperties must be a boolean`);
+  }
+  if (schema.pattern !== undefined) {
+    if (typeof schema.pattern !== "string") {
+      throw new TypeError(`${path}.pattern must be a string`);
+    }
+    try {
+      new RegExp(schema.pattern, "u");
+    } catch {
+      throw new TypeError(`${path}.pattern must be a valid regular expression`);
+    }
   }
 
   for (const [name, propertySchema] of Object.entries(schema.properties ?? {})) {
@@ -185,6 +196,12 @@ function validateNode(value, schema, rootSchema, path) {
     }
     if (schema.maxLength !== undefined && length > schema.maxLength) {
       errors.push(`${path} is longer than maxLength ${schema.maxLength}`);
+    }
+    if (
+      schema.pattern !== undefined &&
+      !new RegExp(schema.pattern, "u").test(value)
+    ) {
+      errors.push(`${path} does not match pattern ${schema.pattern}`);
     }
     if (schema.format === "date-time") {
       if (!isRfc3339DateTime(value)) {
