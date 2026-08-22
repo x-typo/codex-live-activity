@@ -4,6 +4,8 @@ import {
   MAX_REPLY_CODE_POINTS,
   RELAY_TURN_ACTION_SCHEMA_VERSION,
 } from "./relay-turn-action.mjs";
+import { CONTROL_CONTEXT_ID_PATTERN } from "./remote-action-control.mjs";
+import { parseJsonRejectingDuplicateMembers } from "./strict-json.mjs";
 
 export const REMOTE_TURN_ACTION_PATH = "/v1/turn-actions";
 export const DEFAULT_MAX_REMOTE_ACTION_WINDOW_MS = 60_000;
@@ -117,7 +119,7 @@ function headerValue(headers, name) {
 function hasTailscaleCapability(header, expectedCapability) {
   if (typeof header !== "string" || header.length > 8_192) return false;
   try {
-    const capabilities = JSON.parse(header);
+    const capabilities = parseJsonRejectingDuplicateMembers(header);
     if (!isObject(capabilities) || !Object.hasOwn(capabilities, expectedCapability)) {
       return false;
     }
@@ -191,7 +193,8 @@ function validateRemoteAction(candidate) {
       actionName === null ||
       !hasExactKeys(candidate, expectedKeys) ||
       !isSafeId(candidate.actionId) ||
-      !isSafeId(candidate.controlContextId) ||
+      typeof candidate.controlContextId !== "string" ||
+      !CONTROL_CONTEXT_ID_PATTERN.test(candidate.controlContextId) ||
       typeof candidate.issuedAt !== "string" ||
       typeof candidate.expiresAt !== "string"
     ) {
@@ -320,11 +323,16 @@ function actionResultReceipt(value, action) {
   return networkReceipt(value);
 }
 
-function validateContext(value, nowMs) {
+function validateContext(
+  value,
+  { nowMs, installationId, controlContextId },
+) {
   if (!isObject(value)) return null;
   let context;
   try {
     context = {
+      installationId: value.installationId,
+      controlContextId: value.controlContextId,
       expiresAtMs: value.expiresAtMs,
       threadId: value.threadId,
       expectedTurnId: value.expectedTurnId,
@@ -334,6 +342,8 @@ function validateContext(value, nowMs) {
     return null;
   }
   if (
+    context.installationId !== installationId ||
+    context.controlContextId !== controlContextId ||
     !Number.isSafeInteger(context.expiresAtMs) ||
     !isPrivateIdentifier(context.threadId) ||
     !isPrivateIdentifier(context.expectedTurnId) ||
@@ -343,6 +353,16 @@ function validateContext(value, nowMs) {
   }
   if (nowMs >= context.expiresAtMs) return "expired";
   return context;
+}
+
+function matchingContext(left, right) {
+  return (
+    left.installationId === right.installationId &&
+    left.controlContextId === right.controlContextId &&
+    left.expiresAtMs === right.expiresAtMs &&
+    left.threadId === right.threadId &&
+    left.expectedTurnId === right.expectedTurnId
+  );
 }
 
 function validateReplayState(value, action, { allowMissing = false } = {}) {
@@ -388,8 +408,20 @@ export function createRemoteActionHmacFingerprint(key) {
       `fingerprint key must be at least ${MIN_REMOTE_ACTION_HMAC_KEY_BYTES} bytes`,
     );
   }
-  return (action) =>
-    createHmac("sha256", keyCopy).update(JSON.stringify(action)).digest("hex");
+  let disposed = false;
+  const fingerprintAction = (action) => {
+    if (disposed) throw new Error("fingerprint key is unavailable");
+    return createHmac("sha256", keyCopy)
+      .update(JSON.stringify(action))
+      .digest("hex");
+  };
+  Object.defineProperty(fingerprintAction, "dispose", {
+    value: () => {
+      if (!disposed) keyCopy.fill(0);
+      disposed = true;
+    },
+  });
+  return fingerprintAction;
 }
 
 export function createTailscaleTurnActionRequestHandler({
@@ -476,7 +508,9 @@ export function createTailscaleTurnActionRequestHandler({
 
     let action;
     try {
-      action = validateRemoteAction(JSON.parse(decodeRequestBody(request.body)));
+      action = validateRemoteAction(
+        parseJsonRejectingDuplicateMembers(decodeRequestBody(request.body)),
+      );
     } catch {
       action = null;
     }
@@ -546,8 +580,15 @@ export function createTailscaleTurnActionRequestHandler({
     let context;
     try {
       context = validateContext(
-        await resolveControlContext(action.controlContextId),
-        nowMs,
+        await resolveControlContext({
+          installationId,
+          controlContextId: action.controlContextId,
+        }),
+        {
+          nowMs,
+          installationId,
+          controlContextId: action.controlContextId,
+        },
       );
     } catch {
       return response(503, rejected("unavailable", action));
@@ -587,6 +628,16 @@ export function createTailscaleTurnActionRequestHandler({
       return response(statusFor(receipt), receipt);
     };
 
+    let resolvedDispatchContext;
+    try {
+      resolvedDispatchContext = await resolveControlContext({
+        installationId,
+        controlContextId: action.controlContextId,
+      });
+    } catch {
+      return completeReceipt(rejected("unavailable", action));
+    }
+
     let dispatchNowMs;
     try {
       dispatchNowMs = now();
@@ -599,22 +650,39 @@ export function createTailscaleTurnActionRequestHandler({
     if (dispatchNowMs >= expiresAtMs) {
       return completeReceipt(rejected("expiredRequest", action));
     }
-    if (dispatchNowMs >= context.expiresAtMs) {
+    let dispatchContext;
+    try {
+      dispatchContext = validateContext(
+        resolvedDispatchContext,
+        {
+          nowMs: dispatchNowMs,
+          installationId,
+          controlContextId: action.controlContextId,
+        },
+      );
+    } catch {
+      dispatchContext = null;
+    }
+    if (dispatchContext === "expired") {
       return completeReceipt(rejected("expiredControlContext", action));
+    }
+    if (dispatchContext === null || !matchingContext(context, dispatchContext)) {
+      return completeReceipt(rejected("unknownControlContext", action));
     }
 
     const privateAction = {
       schemaVersion: RELAY_TURN_ACTION_SCHEMA_VERSION,
       actionId: action.actionId,
       action: action.action,
-      threadId: context.threadId,
-      expectedTurnId: context.expectedTurnId,
+      threadId: dispatchContext.threadId,
+      expectedTurnId: dispatchContext.expectedTurnId,
     };
     if (action.action === "reply") privateAction.text = action.text;
 
     let receipt;
     try {
-      receipt = actionResultReceipt(await context.dispatch(privateAction), action);
+      const dispatchResult = dispatchContext.dispatch(privateAction);
+      receipt = actionResultReceipt(await dispatchResult, action);
     } catch {
       receipt = null;
     }

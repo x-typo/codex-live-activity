@@ -19,9 +19,9 @@
     },
     "controlContextId": {
       "type": "string",
-      "minLength": 1,
-      "maxLength": 64,
-      "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}(?![\\s\\S])"
+      "minLength": 43,
+      "maxLength": 43,
+      "pattern": "^[A-Za-z0-9_-]{43}(?![\\s\\S])"
     },
     "issuedAt": {
       "type": "string",

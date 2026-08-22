@@ -273,6 +273,15 @@ the paired app credential remains an independent application boundary. Neither
 credential may enter APNs, ActivityKit state, deep-link URLs, logs, analytics,
 the repository, or the relay/App Server environment.
 
+The pre-listener secret loader accepts separate app-token and HMAC-key files
+only when they are absolute, outside the repository, owner-owned, single-link,
+non-symlink private files. Each contains one canonical 43-character base64url
+encoding of exactly 32 bytes, and the decoded values must differ. The app token
+is compared in constant time and maps only to a safe installation ID; the HMAC
+key never leaves the fingerprint closure. These files are a synthetic-tested
+startup boundary, not the final
+Keychain provisioning or phone-pairing workflow.
+
 #### Remote action envelope and private correlation
 
 The phone-facing v1 envelope is
@@ -282,10 +291,13 @@ Stop or Reply action, and Reply text when applicable. It never contains the
 private Codex thread ID or turn ID.
 
 The Mac resolves a context to one exact `(ownedThreadId, expectedTurnId)` pair
-and the existing `MockOneTaskTurnActionBoundary`. A valid context is short-lived,
-rotated for a new turn, and revoked on matching terminal completion, owned-thread
-close, or App Server disconnect. ActivityKit `stale-date` and the displayed
-`stale` state are presentation signals only; neither authorizes a control.
+and the existing `MockOneTaskTurnActionBoundary`. The implemented one-task
+registry also binds it to the authenticated installation. It emits a 43-character
+base64url ID from 32 cryptographically random bytes, enforces an explicitly
+configured maximum lifetime, rotates for a new turn, and revokes on matching
+terminal completion, owned-thread close, or App Server disconnect. ActivityKit
+`stale-date` and the displayed `stale` state are presentation signals only;
+neither authorizes a control.
 
 The pure request handler in `src/tailscale-turn-action-ingress.mjs` applies a
 60-second maximum request validity window with 30 seconds of future clock-skew
@@ -293,20 +305,42 @@ tolerance by default. It also checks the separately stored context expiry. These
 prototype constants can be revisited with physical-device timing evidence, but
 the independent request and context checks are required architecture.
 
+Before either JSON object is trusted, `src/strict-json.mjs` tokenizes the complete
+raw capability header or request body with a separate decoded-name set for every
+object. Duplicate members, nested duplicates, and escaped aliases such as `a`
+and `\u0061` reject before fingerprinting, replay inspection, context resolution,
+or dispatch. The parser deliberately does not normalize distinct Unicode names.
+
+The ingress resolves the install-bound context before the atomic replay claim
+and again after the claim. The registry's dispatch handle performs one final
+synchronous binding, expiry, and correlation check before calling the injected
+boundary. A revoke or rotation while durable I/O is pending therefore becomes a
+content-free rejection and cannot reach App Server.
+
 Adding the opaque context to the iPhone/ActivityKit flow is a later protected
-schema and privacy decision. Until its issuance and authenticated provisioning
-are proved, no executable listener may be wired to the relay.
+schema and privacy decision. The registry proves Mac-side issuance but does not
+place a context in ActivityKit or APNs, so no executable listener is wired yet.
 
 #### Durable replay, receipts, and unavailability
 
-The ingress requires an injected replay store with an atomic claim-before-send
-contract. Its key is the verified installation ID plus action ID. Its value is a
-keyed-HMAC fingerprint of the canonical request, the request expiry, and the
-eventual content-free receipt. A plain reply-text hash is not retained because
-guessable text could be recovered by comparison. The live sidecar must generate
-the HMAC key from at least 32 bytes of cryptographically secure randomness,
-retain it only in owner-private Mac credential storage, and keep it stable for
-at least the replay-retention horizon.
+The ingress uses a file replay store with an atomic claim-before-send contract.
+Its key is the verified installation ID plus action ID; the filename is derived
+from their SHA-256 hash. The owner-private JSON record retains those two safe
+identifiers for integrity validation, plus a keyed-HMAC fingerprint of the
+canonical request, the request expiry, and the eventual content-free receipt. A
+plain reply-text hash is not retained because guessable text could be recovered
+by comparison. The HMAC key loader requires a separate owner-private external
+file containing the canonical base64url encoding of exactly 32 random bytes and
+keeps the key stable for at least the replay-retention horizon.
+
+The replay root must already exist outside the repository as an owner-owned
+`0700` non-symlink directory. Claims use exclusive, no-follow creation of a
+`0600` record. A successful claim is returned only after the record and parent
+directory sync. Completion writes and syncs an adjacent exclusive temporary
+file, atomically renames it over the claim, then syncs the directory. Directory
+sync failure remains a durability failure even if the completed bytes are later
+visible. Malformed, truncated, linked, permission-invalid, replaced-root, and
+other ambiguous states are never considered missing.
 
 - same ID and same fingerprint after completion returns the stored receipt;
 - same ID and a different fingerprint rejects as `replayConflict`;
@@ -327,10 +361,14 @@ unknown. It may retry only the same action ID while the request remains valid;
 it never optimistically displays a stopped task. Unsent Reply text stays only in
 the foreground composer unless encrypted draft retention is separately chosen.
 
-The current implementation proves this contract with an injected deterministic
-store but intentionally supplies no production durable-store implementation,
-network listener, credential storage, context issuer, Tailscale configuration,
-Swift UI, App Intent, or live App Server integration.
+The current implementation supplies the strict JSON adapter boundary, one-task
+context registry, owner-private secret loader/verifier, and durable file replay
+store. A listener-free integration test composes all four with synthetic
+temporary state. It intentionally supplies no network listener, real token
+generation or phone pairing, Keychain adapter, Tailscale configuration, Swift
+UI, App Intent, or live App Server integration. Replay records are retained
+indefinitely in this phase; no automatic pruning may erase a tombstone and make
+an old action dispatchable again.
 
 An App Intent's authentication policy defaults to `alwaysAllowed`, including
 when the device is locked. The future Stop `LiveActivityIntent` must therefore
