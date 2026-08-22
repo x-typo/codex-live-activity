@@ -92,13 +92,13 @@ contract is later connected to the existing executable, App Server may also
 hold that text in its deletion-verified disposable state, just as it does for
 the initial task input.
 
-This is not a network protocol or a phone feature yet. The recent in-process
-action-ID window is deterministic duplicate protection, not authentication or
-durable replay defense. A later return-path decision must separately define
-authentication, expiry, replay protection, task capability correlation, and
-unavailable behavior before any listener or device action is added.
+This mock boundary is not a network protocol or phone feature. Its recent
+in-process action-ID window remains deterministic duplicate protection, not
+authentication or durable replay defense. The selected pre-listener return path
+below now supplies those outer security controls, but it is not wired to a
+socket, App Server process, or device.
 
-## Selected private return path (mock only)
+## Selected private return path (pre-listener)
 
 The selected return transport is tailnet-only HTTPS through
 [Tailscale Serve](https://tailscale.com/docs/features/tailscale-serve), ending at
@@ -125,7 +125,7 @@ defines the phone-facing wire envelope. It carries an opaque, short-lived
 {
   "schemaVersion": 1,
   "actionId": "remote-reply-1",
-  "controlContextId": "context-active-1",
+  "controlContextId": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
   "issuedAt": "2026-08-22T20:00:00.000Z",
   "expiresAt": "2026-08-22T20:01:00.000Z",
   "action": "reply",
@@ -136,29 +136,44 @@ defines the phone-facing wire envelope. It carries an opaque, short-lived
 `src/tailscale-turn-action-ingress.mjs` is a pure, injected request handler. It
 opens no socket and changes no Tailscale state. Before resolving a context, it
 requires both a forwarded `Tailscale-App-Capabilities` grant and a paired
-per-install app-token verifier. A live adapter must keep that token in the
-iPhone and Mac Keychains; it must never place it in APNs, a URL, this repository,
-or a log.
+per-install app-token verifier. `src/strict-json.mjs` rejects duplicate raw JSON
+members, including escaped-equivalent names, in both the capability header and
+action body before object validation. A live adapter must keep the paired token
+in the iPhone and Mac Keychains; it must never place it in APNs, a URL, this
+repository, or a log.
 
-The Mac privately maps a valid context to the exact owned thread and expected
-active turn, then passes the reconstructed action through the already-proved
-mock boundary. The context expires independently of ActivityKit stale display
-state and must be revoked on terminal, close, or disconnect lifecycle. This
-prevents a control rendered for an old turn from targeting a newer turn.
+`src/remote-action-control.mjs` implements the private one-task context registry.
+It issues exactly 32 random bytes as a 43-character base64url identifier, binds
+that identifier to the authenticated installation and one exact owned thread
+and active turn, enforces a caller-selected maximum lifetime, rotates on a new
+turn, and exposes explicit terminal or disconnect revocation. The ingress
+resolves the binding before and after the durable claim. Its dispatch wrapper
+checks the live binding again without an intervening await, so revocation while
+the claim is pending prevents dispatch.
 
-The handler also requires an injected atomic replay store and keyed-HMAC request
-fingerprinting. The durable record is limited to installation ID, action ID,
-fingerprint, expiry, and a content-free receipt. Identical completed retries
-return that receipt; conflicting reuse rejects; an incomplete claim is reported
-as outcome unknown and is never automatically dispatched again. No Reply text,
-app token, control context, thread ID, turn ID, or raw error enters the replay
-record or response. A live sidecar must generate the HMAC key from at least 32
-bytes of cryptographically secure randomness, retain it only in owner-private
-Mac credential storage, and keep it stable through the replay-retention horizon.
+`src/file-remote-action-replay-store.mjs` implements the injected atomic replay
+contract in an owner-private external `0700` directory. It hashes the verified
+installation/action pair into a filename, claims with exclusive no-follow file
+creation, stores only `0600` records, syncs file and directory durability, and
+commits a completed receipt through an adjacent temporary file and atomic
+rename. Identical completed retries return that receipt; conflicting reuse
+rejects; incomplete, malformed, permission-invalid, or durability-uncertain
+records never dispatch. Records are not automatically deleted in this phase.
 
-This remains a contract proof, not a runnable service. It includes no listener,
-durable-store implementation, token provisioning, Tailscale install or policy,
-Swift control, context issuance, background daemon, live App Server wiring, or
+`src/remote-action-secrets.mjs` supplies the paired-token verifier and keyed-HMAC
+fingerprinter from two separate, canonical base64url files. Each file must
+encode exactly 32 bytes and must be an owner-owned, single-link, non-symlink
+private file outside the repository; the two decoded values must also differ.
+Verification uses constant-time comparison and returns only the configured safe
+installation ID. The HMAC key remains Mac-only and both retained byte buffers
+can be zeroed at shutdown. Tests use only
+synthetic temporary values. This loader proves the startup boundary; it does not
+generate a real credential, pair a phone, or replace the later Keychain-backed
+provisioning step.
+
+This remains a pre-listener implementation, not a runnable service. It includes
+no socket, real credential or Keychain provisioning, Tailscale Serve or policy
+configuration, Swift control, background daemon, live App Server wiring, or
 phone action. Stop's future App Intent authentication policy is also unselected;
 iOS defaults an App Intent to `alwaysAllowed`, so the physical Stop control must
 explicitly require authentication before it can be treated as lock-screen-safe.

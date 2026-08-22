@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 import { MockOneTaskTurnActionBoundary } from "../src/relay-turn-action.mjs";
+import { OneTaskControlContextRegistry } from "../src/remote-action-control.mjs";
 import {
   MAX_REMOTE_ACTION_BODY_BYTES,
   MIN_REMOTE_ACTION_HMAC_KEY_BYTES,
@@ -16,6 +17,7 @@ const NOW = Date.parse("2026-08-22T20:00:30.000Z");
 const CAPABILITY = "github.com/x-typo/codex-live-activity/cap/control";
 const REPLY_TEXT = "SENSITIVE_SYNTHETIC_REMOTE_REPLY";
 const APP_TOKEN = "SENSITIVE_SYNTHETIC_APP_TOKEN";
+const CONTROL_CONTEXT_ID = "A".repeat(43);
 
 const remoteActionSchema = JSON.parse(
   await readFile(
@@ -28,7 +30,7 @@ function remoteStop(overrides = {}) {
   return {
     schemaVersion: 1,
     actionId: "remote-stop-1",
-    controlContextId: "context-active-1",
+    controlContextId: CONTROL_CONTEXT_ID,
     issuedAt: "2026-08-22T20:00:00.000Z",
     expiresAt: "2026-08-22T20:01:00.000Z",
     action: "stop",
@@ -40,7 +42,7 @@ function remoteReply(overrides = {}) {
   return {
     schemaVersion: 1,
     actionId: "remote-reply-1",
-    controlContextId: "context-active-1",
+    controlContextId: CONTROL_CONTEXT_ID,
     issuedAt: "2026-08-22T20:00:00.000Z",
     expiresAt: "2026-08-22T20:01:00.000Z",
     action: "reply",
@@ -125,6 +127,9 @@ function createHarness({
   dispatchOverride,
   responder,
   now = () => NOW,
+  authorizedInstallationId = "installation-iphone-1",
+  contextInstallationId = "installation-iphone-1",
+  resolveControlContextOverride,
 } = {}) {
   const requests = [];
   const boundary = new MockOneTaskTurnActionBoundary({
@@ -141,16 +146,32 @@ function createHarness({
   });
   let authorizationCalls = 0;
   let resolutionCalls = 0;
+  let fingerprintCalls = 0;
+  const fingerprint = createRemoteActionHmacFingerprint(
+    "SENSITIVE_SYNTHETIC_FINGERPRINT_KEY",
+  );
   const handler = createTailscaleTurnActionRequestHandler({
     expectedCapability: CAPABILITY,
     authorizeAppToken: async (token) => {
       authorizationCalls += 1;
-      return token === APP_TOKEN ? "installation-iphone-1" : null;
+      return token === APP_TOKEN ? authorizedInstallationId : null;
     },
-    resolveControlContext: async (controlContextId) => {
+    resolveControlContext: async (request) => {
       resolutionCalls += 1;
-      if (!resolve || controlContextId !== "context-active-1") return null;
+      if (resolveControlContextOverride) {
+        return resolveControlContextOverride(request, resolutionCalls);
+      }
+      const { installationId, controlContextId } = request;
+      if (
+        !resolve ||
+        installationId !== contextInstallationId ||
+        controlContextId !== CONTROL_CONTEXT_ID
+      ) {
+        return null;
+      }
       return {
+        installationId: contextInstallationId,
+        controlContextId,
         expiresAtMs: contextExpiresAtMs,
         threadId: "thread-owned",
         expectedTurnId: "turn-active",
@@ -158,9 +179,10 @@ function createHarness({
       };
     },
     replayStore,
-    fingerprintAction: createRemoteActionHmacFingerprint(
-      "SENSITIVE_SYNTHETIC_FINGERPRINT_KEY",
-    ),
+    fingerprintAction: (action) => {
+      fingerprintCalls += 1;
+      return fingerprint(action);
+    },
     now,
   });
   return {
@@ -172,6 +194,9 @@ function createHarness({
     },
     get resolutionCalls() {
       return resolutionCalls;
+    },
+    get fingerprintCalls() {
+      return fingerprintCalls;
     },
   };
 }
@@ -199,6 +224,13 @@ test("the remote schema carries opaque correlation and excludes private task IDs
   );
   assert.notDeepEqual(
     validateJsonSchema(remoteReply({ text: "   " }), remoteActionSchema),
+    [],
+  );
+  assert.notDeepEqual(
+    validateJsonSchema(
+      remoteStop({ controlContextId: "short-context" }),
+      remoteActionSchema,
+    ),
     [],
   );
 });
@@ -323,6 +355,81 @@ test("requires both Tailscale capability and paired app authorization", async ()
   assert.deepEqual(wrongToken.replayStore.claimCalls, []);
 });
 
+test("rejects duplicate action members before fingerprint, replay, or context seams", async () => {
+  const state = createHarness();
+  const actions = [remoteStop(), remoteReply()];
+  let attempts = 0;
+
+  for (const action of actions) {
+    const encoded = JSON.stringify(action);
+    for (const key of Object.keys(action)) {
+      attempts += 1;
+      const body = `${encoded.slice(0, -1)},${JSON.stringify(key)}:${JSON.stringify(
+        action[key],
+      )}}`;
+      const result = await state.handler(requestFor(action, { body }));
+      assert.equal(result.statusCode, 400);
+      assert.equal(receiptFrom(result).reason, "invalidAction");
+    }
+  }
+
+  const stop = JSON.stringify(remoteStop());
+  for (const suffix of [
+    String.raw`,"\u0061ction":"stop"}`,
+    `,"action":"reply"}`,
+  ]) {
+    attempts += 1;
+    const result = await state.handler(
+      requestFor(remoteStop(), { body: `${stop.slice(0, -1)}${suffix}` }),
+    );
+    assert.equal(result.statusCode, 400);
+    assert.equal(receiptFrom(result).reason, "invalidAction");
+  }
+
+  assert.equal(state.authorizationCalls, attempts);
+  assert.equal(state.fingerprintCalls, 0);
+  assert.deepEqual(state.replayStore.inspectCalls, []);
+  assert.deepEqual(state.replayStore.claimCalls, []);
+  assert.equal(state.resolutionCalls, 0);
+  assert.deepEqual(state.requests, []);
+});
+
+test("rejects duplicate capability members before app authorization", async () => {
+  const state = createHarness();
+  const capability = JSON.stringify({
+    [CAPABILITY]: [{ source: ["self"] }],
+  });
+  const request = requestFor(remoteStop());
+  request.headers["tailscale-app-capabilities"] = `${capability.slice(
+    0,
+    -1,
+  )},${JSON.stringify(CAPABILITY)}:[]}`;
+
+  const result = await state.handler(request);
+
+  assert.equal(result.statusCode, 401);
+  assert.equal(receiptFrom(result).reason, "unauthorized");
+  assert.equal(state.authorizationCalls, 0);
+  assert.equal(state.fingerprintCalls, 0);
+  assert.deepEqual(state.replayStore.inspectCalls, []);
+  assert.equal(state.resolutionCalls, 0);
+});
+
+test("binds a control context to the authenticated installation", async () => {
+  const state = createHarness({
+    authorizedInstallationId: "installation-other",
+    contextInstallationId: "installation-iphone-1",
+  });
+
+  const result = await state.handler(requestFor(remoteStop()));
+
+  assert.equal(result.statusCode, 409);
+  assert.equal(receiptFrom(result).reason, "unknownControlContext");
+  assert.equal(state.resolutionCalls, 1);
+  assert.deepEqual(state.replayStore.claimCalls, []);
+  assert.deepEqual(state.requests, []);
+});
+
 test("accepts a case-insensitive Bearer authorization scheme", async () => {
   const state = createHarness();
   const request = requestFor(
@@ -424,6 +531,94 @@ test("freshness is rechecked after the atomic claim and before dispatch", async 
   assert.equal(state.replayStore.claimCalls.length, 1);
   assert.equal(state.replayStore.completeCalls.length, 1);
   assert.deepEqual(state.requests, []);
+});
+
+test("revocation or rotation during a durable claim prevents dispatch", async () => {
+  for (const scenario of ["revoke", "rotate"]) {
+    let randomByte = 0;
+    const registry = new OneTaskControlContextRegistry({
+      maxLifetimeMs: 120_000,
+      now: () => NOW,
+      randomBytes: (length) => Buffer.alloc(length, (randomByte += 1)),
+    });
+    let dispatchCalls = 0;
+    const publicContext = registry.issue({
+      installationId: "installation-iphone-1",
+      threadId: "thread-owned",
+      expectedTurnId: "turn-active",
+      expiresAtMs: NOW + 120_000,
+      dispatch: () => {
+        dispatchCalls += 1;
+        return {
+          schemaVersion: 1,
+          actionId: `remote-race-${scenario}`,
+          action: "stop",
+          outcome: "accepted",
+          reason: null,
+          appServerMethod: "turn/interrupt",
+        };
+      },
+    });
+
+    let releaseClaim;
+    let markClaimStarted;
+    const claimStarted = new Promise((resolve) => {
+      markClaimStarted = resolve;
+    });
+    const claimGate = new Promise((resolve) => {
+      releaseClaim = resolve;
+    });
+    const replayStore = new DeterministicReplayStore();
+    const originalClaim = replayStore.claim.bind(replayStore);
+    replayStore.claim = async (record) => {
+      markClaimStarted();
+      await claimGate;
+      return originalClaim(record);
+    };
+
+    const handler = createTailscaleTurnActionRequestHandler({
+      expectedCapability: CAPABILITY,
+      authorizeAppToken: (token) =>
+        token === APP_TOKEN ? "installation-iphone-1" : null,
+      resolveControlContext: (request) => registry.resolve(request),
+      replayStore,
+      fingerprintAction: createRemoteActionHmacFingerprint(
+        "SENSITIVE_SYNTHETIC_FINGERPRINT_KEY",
+      ),
+      now: () => NOW,
+    });
+    const action = remoteStop({
+      actionId: `remote-race-${scenario}`,
+      controlContextId: publicContext.controlContextId,
+    });
+    const handling = handler(requestFor(action));
+    await claimStarted;
+
+    if (scenario === "revoke") {
+      registry.revokeTurn({
+        threadId: "thread-owned",
+        expectedTurnId: "turn-active",
+      });
+    } else {
+      registry.issue({
+        installationId: "installation-iphone-1",
+        threadId: "thread-owned",
+        expectedTurnId: "turn-next",
+        expiresAtMs: NOW + 120_000,
+        dispatch: () => {
+          throw new Error("replacement context must not receive the old action");
+        },
+      });
+    }
+    releaseClaim();
+
+    const result = await handling;
+    assert.equal(result.statusCode, 409);
+    assert.equal(receiptFrom(result).reason, "unknownControlContext");
+    assert.equal(dispatchCalls, 0);
+    assert.equal(replayStore.completeCalls.length, 1);
+    assert.equal(replayStore.completeCalls[0].receipt.reason, "unknownControlContext");
+  }
 });
 
 test("durable claim returns a completed retry and rejects conflicting reuse", async () => {
