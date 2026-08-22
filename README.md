@@ -3,7 +3,7 @@
 A personal project exploring how to bring Codex task status to iPhone through
 Live Activities and the Dynamic Island.
 
-The repository now contains three bounded components:
+The repository now contains four bounded components:
 
 - a versioned, privacy-conscious reducer for supported Codex App Server
   lifecycle events; and
@@ -11,7 +11,9 @@ The repository now contains three bounded components:
   allowlisted lifecycle state into ActivityKit APNs payloads through a dry-run
   stdout transport; and
 - a separate, dependency-free HTTP/2 sender that accepts only those redacted
-  payloads and is designed for direct APNs delivery from the Mac.
+  payloads and is designed for direct APNs delivery from the Mac; and
+- a versioned, transport-agnostic mock action boundary that maps Stop and Reply
+  for the one relay-owned active turn into supported App Server requests.
 
 The relay remains credential-free and does not observe tasks owned by the stock
 desktop app or retain task content. It emits generic state labels only; `title`
@@ -47,6 +49,54 @@ Its stdout contains only generic mock APNs payloads. Any server-initiated App
 Server request stops the dry run because this prototype does not implement an
 approval or user-input UI; those remain Mac-side responsibilities for a later
 phase.
+
+## Mock interactive turn actions
+
+[`schema/relay-turn-action.v1.schema.json`](schema/relay-turn-action.v1.schema.json)
+defines the local semantic boundary that must be proved before choosing an
+iPhone-to-Mac return path. It accepts only two exact one-task shapes:
+
+```json
+{
+  "schemaVersion": 1,
+  "actionId": "action-stop-1",
+  "action": "stop",
+  "threadId": "thread-owned",
+  "expectedTurnId": "turn-active"
+}
+```
+
+```json
+{
+  "schemaVersion": 1,
+  "actionId": "action-reply-1",
+  "action": "reply",
+  "threadId": "thread-owned",
+  "expectedTurnId": "turn-active",
+  "text": "Please continue with the safe option."
+}
+```
+
+`src/relay-turn-action.mjs` maps Stop to `turn/interrupt` and Reply to
+`turn/steer` with `expectedTurnId`. Reply never becomes `turn/start`, and
+neither action can answer or approve a protected App Server request. The action
+gate uses the relay's private active-turn correlation rather than the displayed
+Live Activity state, because a stale presentation can still refer to an active
+turn.
+
+Only allowlisted receipts leave the mock boundary. They contain the action ID,
+action kind, outcome, safe reason, and App Server method; they never contain
+reply text, thread ID, turn ID, raw App Server errors, or task content. Reply
+text is forwarded unchanged only in the in-memory App Server request. If this
+contract is later connected to the existing executable, App Server may also
+hold that text in its deletion-verified disposable state, just as it does for
+the initial task input.
+
+This is not a network protocol or a phone feature yet. The recent in-process
+action-ID window is deterministic duplicate protection, not authentication or
+durable replay defense. A later return-path decision must separately define
+authentication, expiry, replay protection, task capability correlation, and
+unavailable behavior before any listener or device action is added.
 
 ## Direct APNs sender boundary
 

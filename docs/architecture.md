@@ -187,6 +187,55 @@ stable thread status flag and persists until a supported status change or
 disconnect. The executable stops on any server-initiated JSON-RPC request because
 this dry-run phase has no approval UI or user-input response channel.
 
+### Mock interactive turn-action contract
+
+The interactive mock is a separate control-plane boundary, not an expansion of
+the status reducer or APNs payload. Its versioned input is
+`schema/relay-turn-action.v1.schema.json`. Stop and Reply both carry a restricted
+action ID, the one owned thread ID, and an expected active turn ID. Reply alone
+also carries non-empty, well-formed text capped at 4,096 code points. Extra
+fields, other actions, another thread, or a different or absent active turn fail
+closed before an App Server request is dispatched.
+Validated primitive fields are copied into a canonical snapshot before active-turn
+correlation or asynchronous dispatch, so later caller mutation cannot alter the
+request or its redacted receipt.
+
+`src/relay-turn-action.mjs` performs only these mappings:
+
+- Stop becomes `turn/interrupt` with the owned `threadId` and active `turnId`.
+- Reply becomes `turn/steer` with the owned `threadId`, the exact text input,
+  and `expectedTurnId`.
+
+The App Server response must match the action's JSON-RPC ID. A Reply response
+must also return the same turn ID. Raw errors and response bodies are discarded.
+An accepted Stop prevents more actions for that turn while its terminal
+lifecycle event is pending, and only one action can be in flight. The boundary
+remembers the 64 most recent dispatched action IDs in memory and rejects their
+reuse. Its Stop-pending latch is only a boolean; it keeps no reply text, pending
+turn ID, or action journal. Stop sets the latch before dispatch; a rejected
+request clears it, and terminal, close, or stream-loss handling can clear it
+while a response is still in flight without a late success restoring it.
+
+Control eligibility comes from the relay's private active-turn correlation,
+which is established by the supported `turn/start` response and corroborated by
+the matching lifecycle notification. It does not come from the published UI
+state: `stale` can still describe an in-flight turn. The active correlation must
+be cleared on its matching terminal event, owned-thread close, or stream loss,
+and that same lifecycle handling must clear the boolean Stop-pending latch.
+
+This phase supplies only an injected mock request function and deterministic
+tests. It does not wire an inbound listener into the relay executable, change
+the one-way APNs pipeline, add an iPhone control, select a network transport, or
+answer an approval or structured user-input request. Reply text can therefore
+exist transiently only in the outbound App Server request used by a future
+adapter. If wired to the existing owned process, it may also enter that process's
+deletion-verified disposable SQLite state; it must not enter relay receipts,
+logs, APNs payloads, retained action state, or durable action storage.
+
+The bounded recent-ID set is not a security claim. Authentication, expiry,
+durable replay defense, task-scoped capabilities, and unavailable behavior
+belong to the separately selected return transport.
+
 ### Ordering, stale state, and terminal policy
 
 The existing reducer rejects old-turn activity and completion by turn

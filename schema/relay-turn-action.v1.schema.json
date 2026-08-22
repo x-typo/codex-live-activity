@@ -1,0 +1,96 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/x-typo/codex-live-activity/schema/relay-turn-action.v1.schema.json",
+  "title": "One-task relay turn action v1",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/stop"
+    },
+    {
+      "$ref": "#/$defs/reply"
+    }
+  ],
+  "$defs": {
+    "actionId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}(?![\\s\\S])"
+    },
+    "threadId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^(?![\\s\\S]*[\\uD800-\\uDFFF])[^\\r\\n\\t]+(?![\\s\\S])"
+    },
+    "turnId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^(?![\\s\\S]*[\\uD800-\\uDFFF])[^\\r\\n\\t]+(?![\\s\\S])"
+    },
+    "stop": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schemaVersion",
+        "actionId",
+        "action",
+        "threadId",
+        "expectedTurnId"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "const": 1
+        },
+        "actionId": {
+          "$ref": "#/$defs/actionId"
+        },
+        "action": {
+          "const": "stop"
+        },
+        "threadId": {
+          "$ref": "#/$defs/threadId"
+        },
+        "expectedTurnId": {
+          "$ref": "#/$defs/turnId"
+        }
+      }
+    },
+    "reply": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schemaVersion",
+        "actionId",
+        "action",
+        "threadId",
+        "expectedTurnId",
+        "text"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "const": 1
+        },
+        "actionId": {
+          "$ref": "#/$defs/actionId"
+        },
+        "action": {
+          "const": "reply"
+        },
+        "threadId": {
+          "$ref": "#/$defs/threadId"
+        },
+        "expectedTurnId": {
+          "$ref": "#/$defs/turnId"
+        },
+        "text": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096,
+          "pattern": "^(?![\\s\\S]*[\\uD800-\\uDFFF])(?=[\\s\\S]*\\S)"
+        }
+      }
+    }
+  }
+}
