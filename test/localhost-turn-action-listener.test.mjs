@@ -7,9 +7,10 @@ import {
   LOCALHOST_TURN_ACTION_HOST,
   createLocalhostTurnActionListener,
 } from "../src/localhost-turn-action-listener.mjs";
-import { MAX_REMOTE_ACTION_BODY_BYTES } from "../src/tailscale-turn-action-ingress.mjs";
-
-const ACTION_PATH = "/v1/turn-actions";
+import {
+  MAX_REMOTE_ACTION_BODY_BYTES,
+  REMOTE_TURN_ACTION_PATH,
+} from "../src/tailscale-turn-action-ingress.mjs";
 
 function ingressResponse({
   statusCode = 200,
@@ -38,7 +39,7 @@ function ingressResponse({
 function requestListener({
   port,
   method = "POST",
-  path = ACTION_PATH,
+  path = REMOTE_TURN_ACTION_PATH,
   body = "{}",
   headers = {},
 } = {}) {
@@ -109,7 +110,7 @@ function abortPartialRequest({ port }) {
     });
     socket.on("connect", () => {
       socket.write(
-        `POST ${ACTION_PATH} HTTP/1.1\r\nHost: 127.0.0.1:${port}\r\nContent-Length: 100\r\n\r\n{`,
+        `POST ${REMOTE_TURN_ACTION_PATH} HTTP/1.1\r\nHost: 127.0.0.1:${port}\r\nContent-Length: 100\r\n\r\n{`,
       );
       socket.destroy();
     });
@@ -168,7 +169,7 @@ test("starts closed, binds only literal IPv4 loopback, projects headers, and clo
       },
       {
         method: "POST",
-        path: ACTION_PATH,
+        path: REMOTE_TURN_ACTION_PATH,
         headers: {
           authorization: "Bearer synthetic-token",
           "content-type": "application/json",
@@ -205,7 +206,12 @@ test("rejects method, target, HTTP version, Host, and framing deviations before 
       404,
     );
     assert.equal(
-      (await requestListener({ port, path: `${ACTION_PATH}?action=stop` }))
+      (
+        await requestListener({
+          port,
+          path: `${REMOTE_TURN_ACTION_PATH}?action=stop`,
+        })
+      )
         .statusCode,
       404,
     );
@@ -225,31 +231,31 @@ test("rejects method, target, HTTP version, Host, and framing deviations before 
 
     const http10 = await rawRequest({
       port,
-      raw: `POST ${ACTION_PATH} HTTP/1.0\r\nHost: 127.0.0.1:${port}\r\nContent-Length: 2\r\n\r\n{}`,
+      raw: `POST ${REMOTE_TURN_ACTION_PATH} HTTP/1.0\r\nHost: 127.0.0.1:${port}\r\nContent-Length: 2\r\n\r\n{}`,
     });
     assert.match(http10, /^HTTP\/1\.1 404 /u);
 
     const missingHost = await rawRequest({
       port,
-      raw: `POST ${ACTION_PATH} HTTP/1.1\r\nContent-Length: 2\r\n\r\n{}`,
+      raw: `POST ${REMOTE_TURN_ACTION_PATH} HTTP/1.1\r\nContent-Length: 2\r\n\r\n{}`,
     });
     assert.match(missingHost, /^HTTP\/1\.1 400 /u);
 
     const chunked = await rawRequest({
       port,
-      raw: `POST ${ACTION_PATH} HTTP/1.1\r\nHost: 127.0.0.1:${port}\r\nTransfer-Encoding: chunked\r\n\r\n2\r\n{}\r\n0\r\n\r\n`,
+      raw: `POST ${REMOTE_TURN_ACTION_PATH} HTTP/1.1\r\nHost: 127.0.0.1:${port}\r\nTransfer-Encoding: chunked\r\n\r\n2\r\n{}\r\n0\r\n\r\n`,
     });
     assert.match(chunked, /^HTTP\/1\.1 400 /u);
 
     const compressed = await rawRequest({
       port,
-      raw: `POST ${ACTION_PATH} HTTP/1.1\r\nHost: 127.0.0.1:${port}\r\nContent-Encoding: gzip\r\nContent-Length: 2\r\n\r\n{}`,
+      raw: `POST ${REMOTE_TURN_ACTION_PATH} HTTP/1.1\r\nHost: 127.0.0.1:${port}\r\nContent-Encoding: gzip\r\nContent-Length: 2\r\n\r\n{}`,
     });
     assert.match(compressed, /^HTTP\/1\.1 400 /u);
 
     const missingLength = await rawRequest({
       port,
-      raw: `POST ${ACTION_PATH} HTTP/1.1\r\nHost: 127.0.0.1:${port}\r\n\r\n`,
+      raw: `POST ${REMOTE_TURN_ACTION_PATH} HTTP/1.1\r\nHost: 127.0.0.1:${port}\r\n\r\n`,
     });
     assert.match(missingLength, /^HTTP\/1\.1 400 /u);
 
@@ -289,13 +295,13 @@ test("rejects duplicate protected raw headers before the handler", async () => {
         : `Host: 127.0.0.1:${port}\r\n`;
       const raw = await rawRequest({
         port,
-        raw: `POST ${ACTION_PATH} HTTP/1.1\r\n${host}${duplicate}\r\nContent-Length: 2\r\n\r\n{}`,
+        raw: `POST ${REMOTE_TURN_ACTION_PATH} HTTP/1.1\r\n${host}${duplicate}\r\nContent-Length: 2\r\n\r\n{}`,
       });
       assert.match(raw, /^HTTP\/1\.1 400 /u);
     }
     const duplicateLength = await rawRequest({
       port,
-      raw: `POST ${ACTION_PATH} HTTP/1.1\r\nHost: 127.0.0.1:${port}\r\nContent-Length: 2\r\nContent-Length: 2\r\n\r\n{}`,
+      raw: `POST ${REMOTE_TURN_ACTION_PATH} HTTP/1.1\r\nHost: 127.0.0.1:${port}\r\nContent-Length: 2\r\nContent-Length: 2\r\n\r\n{}`,
     }).catch((error) => {
       if (error.code === "ECONNRESET") return "";
       throw error;

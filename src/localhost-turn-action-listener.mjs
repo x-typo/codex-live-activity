@@ -2,7 +2,10 @@ import { createServer } from "node:http";
 
 import { RELAY_TURN_ACTION_SCHEMA_VERSION } from "./relay-turn-action.mjs";
 import { parseJsonRejectingDuplicateMembers } from "./strict-json.mjs";
-import { MAX_REMOTE_ACTION_BODY_BYTES } from "./tailscale-turn-action-ingress.mjs";
+import {
+  MAX_REMOTE_ACTION_BODY_BYTES,
+  REMOTE_TURN_ACTION_PATH,
+} from "./tailscale-turn-action-ingress.mjs";
 
 export const LOCALHOST_TURN_ACTION_HOST = "127.0.0.1";
 export const LOCALHOST_MAX_HEADER_BYTES = 16_384;
@@ -269,7 +272,7 @@ async function handleNodeRequest(
   if (
     request.httpVersion !== "1.1" ||
     request.method !== "POST" ||
-    request.url !== "/v1/turn-actions"
+    request.url !== REMOTE_TURN_ACTION_PATH
   ) {
     request.on("error", () => {});
     request.resume();
