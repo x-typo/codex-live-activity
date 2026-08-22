@@ -8,11 +8,16 @@ import {
   rm,
   writeFile,
 } from "node:fs/promises";
+import { request as httpRequest } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
 import { createFileRemoteActionReplayStore } from "../src/file-remote-action-replay-store.mjs";
+import {
+  LOCALHOST_TURN_ACTION_HOST,
+  createLocalhostTurnActionListener,
+} from "../src/localhost-turn-action-listener.mjs";
 import { OneTaskControlContextRegistry } from "../src/remote-action-control.mjs";
 import { loadRemoteActionSecrets } from "../src/remote-action-secrets.mjs";
 import {
@@ -27,7 +32,39 @@ const APP_TOKEN = Buffer.alloc(32, 0x41).toString("base64url");
 const HMAC_KEY = Buffer.alloc(32, 0x42).toString("base64url");
 const REPLY_TEXT = "SYNTHETIC_PRIVATE_REPLY_ONLY_IN_MEMORY";
 
-test("wires the hardened seams without a listener or retained task content", async () => {
+function sendLoopbackRequest(port, request) {
+  const body = Buffer.from(request.body);
+  return new Promise((resolve, reject) => {
+    const clientRequest = httpRequest(
+      {
+        agent: false,
+        host: LOCALHOST_TURN_ACTION_HOST,
+        port,
+        method: request.method,
+        path: request.path,
+        headers: {
+          ...request.headers,
+          "content-length": body.byteLength,
+        },
+      },
+      (response) => {
+        const chunks = [];
+        response.on("data", (chunk) => chunks.push(chunk));
+        response.on("end", () =>
+          resolve({
+            statusCode: response.statusCode,
+            headers: response.headers,
+            body: Buffer.concat(chunks).toString("utf8"),
+          }),
+        );
+      },
+    );
+    clientRequest.on("error", reject);
+    clientRequest.end(body);
+  });
+}
+
+test("wires the hardened seams through literal localhost without retained task content", async () => {
   const stateRoot = await mkdtemp(join(tmpdir(), "cla-pre-listener-"));
   const secretRoot = join(stateRoot, "secrets");
   const replayRoot = join(stateRoot, "replay");
@@ -40,6 +77,7 @@ test("wires the hardened seams without a listener or retained task content", asy
   await writeFile(hmacKeyPath, HMAC_KEY, { mode: 0o600 });
 
   let secrets;
+  const listeners = [];
   try {
     secrets = await loadRemoteActionSecrets({
       installationId: "installation-iphone-1",
@@ -105,14 +143,29 @@ test("wires the hardened seams without a listener or retained task content", asy
       body: JSON.stringify(action),
     };
 
-    const first = await handler(request);
-    const retry = await handler(request);
+    const listener = createLocalhostTurnActionListener({
+      handleRequest: handler,
+      revokeControlContexts: () => registry.revokeAll(),
+    });
+    listeners.push(listener);
+    const address = await listener.start();
+    assert.equal(address.host, "127.0.0.1");
+
+    const first = await sendLoopbackRequest(address.port, request);
+    const retry = await sendLoopbackRequest(address.port, request);
     assert.equal(first.statusCode, 200);
     assert.deepEqual(JSON.parse(retry.body), JSON.parse(first.body));
     assert.equal(dispatched.length, 1);
     assert.equal(dispatched[0].text, REPLY_TEXT);
 
-    registry.revokeAll();
+    const missingCapability = structuredClone(request);
+    delete missingCapability.headers["tailscale-app-capabilities"];
+    const denied = await sendLoopbackRequest(address.port, missingCapability);
+    assert.equal(denied.statusCode, 401);
+    assert.equal(dispatched.length, 1);
+
+    await listener.close();
+    assert.equal(listener.listening, false);
     const restartedStore = await createFileRemoteActionReplayStore({
       directoryPath: replayRoot,
       repositoryRoot,
@@ -125,9 +178,19 @@ test("wires the hardened seams without a listener or retained task content", asy
       fingerprintAction: secrets.fingerprintAction,
       now: () => NOW,
     });
-    const restartRetry = await restartedHandler(request);
+    const restartedListener = createLocalhostTurnActionListener({
+      handleRequest: restartedHandler,
+      revokeControlContexts: () => registry.revokeAll(),
+    });
+    listeners.push(restartedListener);
+    const restartedAddress = await restartedListener.start();
+    const restartRetry = await sendLoopbackRequest(
+      restartedAddress.port,
+      request,
+    );
     assert.deepEqual(JSON.parse(restartRetry.body), JSON.parse(first.body));
     assert.equal(dispatched.length, 1);
+    await restartedListener.close();
 
     const replayFiles = await readdir(replayRoot);
     assert.equal(replayFiles.length, 1);
@@ -140,6 +203,7 @@ test("wires the hardened seams without a listener or retained task content", asy
       ),
     );
   } finally {
+    await Promise.allSettled(listeners.map((listener) => listener.close()));
     secrets?.dispose();
     await rm(stateRoot, { recursive: true, force: true });
   }

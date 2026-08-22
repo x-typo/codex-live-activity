@@ -3,7 +3,7 @@
 A personal project exploring how to bring Codex task status to iPhone through
 Live Activities and the Dynamic Island.
 
-The repository now contains four bounded components:
+The repository now contains five bounded components:
 
 - a versioned, privacy-conscious reducer for supported Codex App Server
   lifecycle events; and
@@ -13,7 +13,9 @@ The repository now contains four bounded components:
 - a separate, dependency-free HTTP/2 sender that accepts only those redacted
   payloads and is designed for direct APNs delivery from the Mac; and
 - a versioned, transport-agnostic mock action boundary that maps Stop and Reply
-  for the one relay-owned active turn into supported App Server requests.
+  for the one relay-owned active turn into supported App Server requests; and
+- a closed-by-default HTTP/1.1 adapter that exposes the hardened action ingress
+  only on literal IPv4 loopback for disposable local proofs.
 
 The relay remains credential-free and does not observe tasks owned by the stock
 desktop app or retain task content. It emits generic state labels only; `title`
@@ -94,15 +96,15 @@ the initial task input.
 
 This mock boundary is not a network protocol or phone feature. Its recent
 in-process action-ID window remains deterministic duplicate protection, not
-authentication or durable replay defense. The selected pre-listener return path
-below now supplies those outer security controls, but it is not wired to a
-socket, App Server process, or device.
+authentication or durable replay defense. The selected return layer below now
+supplies those outer controls and a literal-loopback adapter, but it is not wired
+to the relay executable, App Server process, or device.
 
-## Selected private return path (pre-listener)
+## Localhost return-path adapter
 
 The selected return transport is tailnet-only HTTPS through
 [Tailscale Serve](https://tailscale.com/docs/features/tailscale-serve), ending at
-a future action-ingress sidecar that listens only on `127.0.0.1`. Tailscale
+an action-ingress sidecar that can listen only on `127.0.0.1`. Tailscale
 Funnel, a public tunnel, direct LAN or tailnet binding, and remote exposure of
 Codex App Server are outside this design. App Server remains a private local
 stdio child behind the existing one-task relay.
@@ -171,13 +173,26 @@ synthetic temporary values. This loader proves the startup boundary; it does not
 generate a real credential, pair a phone, or replace the later Keychain-backed
 provisioning step.
 
-This remains a pre-listener implementation, not a runnable service. It includes
-no socket, real credential or Keychain provisioning, Tailscale Serve or policy
+`src/localhost-turn-action-listener.mjs` is the only socket owner. Constructing
+it opens nothing; an explicit one-shot `start()` binds with no host override to
+`127.0.0.1`, verifies the bound address, and accepts only one exact HTTP/1.1
+`POST /v1/turn-actions` request per connection. It requires the exact local
+`Host`, one canonical bounded `Content-Length`, no transfer/content encoding or
+trailers, and unique protected headers before it buffers at most 32 KiB. Only
+the content type, paired bearer, and Tailscale capability header reach the pure
+handler. Responses are content-free, non-cacheable, and connection-closing.
+Shutdown stops acceptance, revokes controls, and bounds socket draining.
+
+The adapter has no CLI and is not a persistent service. Deterministic tests open
+it on an ephemeral loopback port with synthetic temporary secrets and replay
+state, send real local HTTP requests, then close it and remove that state. No
+real credential or Keychain provisioning, Tailscale Serve or policy
 configuration, Swift control, background daemon, live App Server wiring, or
-phone action. Stop's future App Intent authentication policy is also unselected;
-iOS defaults an App Intent to `alwaysAllowed`, so the physical Stop control must
-explicitly require authentication before it can be treated as lock-screen-safe.
-Those are separately gated phases.
+phone action exists. The later Serve phase must observe and explicitly adopt its
+forwarded `Host`; it must not weaken the local proof by guessing an authority.
+Stop's future App Intent authentication policy is also unselected; the physical
+Stop control must explicitly require authentication before it can be treated as
+lock-screen-safe. Those are separately gated phases.
 
 ## Direct APNs sender boundary
 
