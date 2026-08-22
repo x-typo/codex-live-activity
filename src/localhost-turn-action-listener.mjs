@@ -244,7 +244,6 @@ function writeResponse(response, value) {
   const selected =
     selectSafeIngressResponse(value) ?? adapterResponse(503, "unavailable");
   try {
-    response.shouldKeepAlive = false;
     response.strictContentLength = true;
     response.setHeader("connection", "close");
     response.setHeader("content-length", Buffer.byteLength(selected.body));

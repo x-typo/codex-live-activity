@@ -53,8 +53,8 @@ function requestListener({
         method,
         path,
         headers: {
-          "content-length": encoded.byteLength,
           ...headers,
+          "content-length": encoded.byteLength,
         },
       },
       (response) => {
