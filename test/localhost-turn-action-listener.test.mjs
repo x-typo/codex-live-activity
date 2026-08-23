@@ -4,6 +4,7 @@ import { connect } from "node:net";
 import test from "node:test";
 
 import {
+  LOCALHOST_MAX_EXPECTED_AUTHORITY_BYTES,
   LOCALHOST_SHUTDOWN_GRACE_MS,
   LOCALHOST_TURN_ACTION_HOST,
   createLocalhostTurnActionListener,
@@ -200,6 +201,118 @@ test("starts closed, binds only literal IPv4 loopback, projects headers, and clo
     port: address.port,
   });
   assert.throws(() => listener.start(), /closed|only once/u);
+});
+
+test("admits only the exact configured forwarded authority and closes cleanly", async () => {
+  const expectedAuthority = "relay-node.example.ts.net:443";
+  let handled = 0;
+  const listener = createLocalhostTurnActionListener({
+    handleRequest: async () => {
+      handled += 1;
+      return ingressResponse();
+    },
+    revokeControlContexts: () => {},
+  });
+  const { port } = await listener.start({ expectedAuthority });
+  try {
+    assert.equal(
+      (
+        await requestListener({
+          port,
+          headers: { host: expectedAuthority },
+        })
+      ).statusCode,
+      200,
+    );
+    for (const host of [
+      `${LOCALHOST_TURN_ACTION_HOST}:${port}`,
+      "RELAY-NODE.EXAMPLE.TS.NET:443",
+      "relay-node.example.ts.net",
+      "relay-node.example.ts.net:444",
+    ]) {
+      assert.equal(
+        (await requestListener({ port, headers: { host } })).statusCode,
+        400,
+      );
+    }
+
+    const duplicateHost = await rawRequest({
+      port,
+      raw: `POST ${REMOTE_TURN_ACTION_PATH} HTTP/1.1\r\nHost: ${expectedAuthority}\r\nHost: ${expectedAuthority}\r\nContent-Type: application/json\r\nContent-Length: ${Buffer.byteLength(DEFAULT_REQUEST_BODY)}\r\n\r\n${DEFAULT_REQUEST_BODY}`,
+    });
+    assert.match(duplicateHost, /^HTTP\/1\.1 400 /u);
+    assert.equal(handled, 1);
+  } finally {
+    await listener.close();
+  }
+  assert.equal(listener.listening, false);
+  await expectConnectionFailure({ host: LOCALHOST_TURN_ACTION_HOST, port });
+});
+
+test("admits the exact configured forwarded FQDN without a port", async () => {
+  const expectedAuthority = "relay-node.example.ts.net";
+  let handled = 0;
+  const listener = createLocalhostTurnActionListener({
+    handleRequest: async () => {
+      handled += 1;
+      return ingressResponse();
+    },
+    revokeControlContexts: () => {},
+  });
+  const { port } = await listener.start({ expectedAuthority });
+  try {
+    const result = await requestListener({
+      port,
+      headers: { host: expectedAuthority },
+    });
+    assert.equal(result.statusCode, 200);
+    assert.equal(handled, 1);
+  } finally {
+    await listener.close();
+  }
+});
+
+test("rejects malformed expected authorities before opening the socket", async () => {
+  const invalidAuthorities = [
+    null,
+    443,
+    {},
+    "",
+    "localhost",
+    "127.0.0.1",
+    "127.0.0.1:443",
+    "192.0.2.1",
+    "relay..example.ts.net",
+    "-relay.example.ts.net",
+    "relay.example.ts.net:",
+    "relay.example.ts.net:0443",
+    "relay.example.ts.net:65536",
+    "user@relay.example.ts.net",
+    "relay.example.ts.net/path",
+    "relay.example.ts.net?query",
+    "relay.example.ts.net#fragment",
+    "relay.example.ts.net\r\nHost: attacker.example",
+    "relay.example.ts.net\0",
+    "r\u00e9lay.example.ts.net",
+    "a".repeat(LOCALHOST_MAX_EXPECTED_AUTHORITY_BYTES + 1),
+  ];
+
+  for (const expectedAuthority of invalidAuthorities) {
+    let revocations = 0;
+    const listener = createLocalhostTurnActionListener({
+      handleRequest: async () => ingressResponse(),
+      revokeControlContexts: () => {
+        revocations += 1;
+      },
+    });
+    assert.throws(
+      () => listener.start({ expectedAuthority }),
+      /expectedAuthority/u,
+    );
+    assert.equal(listener.listening, false);
+    await listener.close();
+    assert.equal(revocations, 1);
+  }
 });
 
 test("rejects method, target, HTTP version, Host, and framing deviations before the handler", async () => {

@@ -3,7 +3,7 @@
 A personal project exploring how to bring Codex task status to iPhone through
 Live Activities and the Dynamic Island.
 
-The repository now contains five bounded components:
+The repository now contains six bounded components:
 
 - a versioned, privacy-conscious reducer for supported Codex App Server
   lifecycle events; and
@@ -15,7 +15,10 @@ The repository now contains five bounded components:
 - a versioned, transport-agnostic mock action boundary that maps Stop and Reply
   for the one relay-owned active turn into supported App Server requests; and
 - a closed-by-default HTTP/1.1 adapter that exposes the hardened action ingress
-  only on literal IPv4 loopback for disposable local proofs.
+  only on literal IPv4 loopback for disposable local proofs; and
+- a foreground-only Tailscale admission-proof executable that loads
+  pre-created owner-private state, pins the exact Serve-forwarded authority,
+  and exercises a no-side-effect Stop dispatch.
 
 The relay remains credential-free and does not observe tasks owned by the stock
 desktop app or retain task content. It emits generic state labels only; `title`
@@ -80,6 +83,43 @@ Tailscale Serve admission. The port, control context, token, private thread and
 turn IDs, task input, and Reply text never enter stdout or the safe proof-status
 lines on stderr. Tailscale remains unconfigured and no phone or APNs action is
 performed.
+
+## Foreground Tailscale admission proof
+
+`npm run tailscale-admission-proof` opens the same loopback-only composition for
+one externally driven, content-free admission proof. It never runs Tailscale,
+edits tailnet policy, generates a credential, or starts a background service.
+The operator must supply a fixed local port, the exact authority previously
+observed through Serve, one parameterless app capability, two distinct
+owner-private server files, and an owner-private replay root:
+
+```sh
+npm run --silent tailscale-admission-proof -- \
+  --port 49152 \
+  --expected-authority '<mac>.<tailnet>.ts.net' \
+  --capability '<tailnet>.ts.net/cap/codex-live-activity-control' \
+  --app-token-file '/owner-private/server-app-token' \
+  --hmac-key-file '/owner-private/server-replay-hmac' \
+  --replay-root '/owner-private/replay' \
+  --timeout-ms 60000
+```
+
+The ready artifact contains only the public control context, expiry, exact
+content-free Stop body, listener port, authority, and capability identifier.
+It never contains the bearer, HMAC key, secret paths, private Codex identifiers,
+or a client-supplied capability header. A separate proof client reads its own
+copy of the bearer and sends the Stop through tailnet HTTPS; Tailscale Serve,
+not the client, must inject `Tailscale-App-Capabilities`. After the client has
+verified that an identical retry returns identical receipt bytes, a signal
+closes the listener. Exit succeeds only when the no-side-effect dispatch stub
+ran exactly once and every parsed action field matched the emitted Stop body.
+There is no stdout heartbeat: silent output loss is detected on the next write,
+so cleanup remains bounded by the required `--timeout-ms` rather than immediate.
+
+This proves a manual two-endpoint protocol pair, not an iPhone installation.
+The future companion must import or create its bearer in iPhone Keychain and
+receive the public control context through an approved content-free path before
+the project can claim phone pairing or a lock-screen action.
 
 ## Mock interactive turn actions
 
@@ -207,12 +247,15 @@ provisioning step.
 `src/localhost-turn-action-listener.mjs` is the only socket owner. Constructing
 it opens nothing; an explicit one-shot `start()` binds with no host override to
 `127.0.0.1`, verifies the bound address, and accepts only one exact HTTP/1.1
-`POST /v1/turn-actions` request per connection. It requires the exact local
-`Host`, one canonical bounded `Content-Length`, no transfer/content encoding or
-trailers, and unique protected headers before it buffers at most 32 KiB. Only
-the content type, paired bearer, and Tailscale capability header reach the pure
-handler. Responses are content-free, non-cacheable, and connection-closing.
-Shutdown stops acceptance, revokes controls, and bounds socket draining.
+`POST /v1/turn-actions` request per connection. The caller may pin one bounded
+ASCII DNS authority for exact Serve `Host` comparison, but that value can never
+change the loopback bind. When omitted, the listener retains the exact local
+`127.0.0.1:<port>` authority used by deterministic proofs. It requires one
+canonical bounded `Content-Length`, no transfer/content encoding or trailers,
+and unique protected headers before it buffers at most 32 KiB. Only the content
+type, paired bearer, and Tailscale capability header reach the pure handler.
+Responses are content-free, non-cacheable, and connection-closing. Shutdown
+stops acceptance, revokes controls, and bounds socket draining.
 
 `src/remote-action-receipt.mjs` is the single public-receipt contract used by
 the ingress, durable replay validation, and listener. Its table owns the exact
@@ -226,14 +269,16 @@ listener. The listener independently parses the submitted envelope through the
 ingress validator, rejects mismatched or semantically impossible handler
 receipts, and emits fixed-order JSON bytes.
 
-The adapter has no standalone CLI and is not a persistent service. Deterministic
-tests and the relay's explicit composition-proof mode open it on an ephemeral
-loopback port with synthetic temporary secrets and replay state, send real local
-HTTP requests, then close it and remove that state. No real credential or
-Keychain provisioning, Tailscale Serve or policy configuration, Swift control,
-background daemon, or phone action exists. The later Serve phase must observe
-and explicitly adopt its forwarded `Host`; it must not weaken the local proof by
-guessing an authority.
+The adapter is not a persistent service. Deterministic tests, the relay's local
+composition proof, and the foreground admission-proof executable open it only
+after explicit startup, then close and revoke it. A bounded live Serve probe
+observed that HTTPS on port 443 forwards the lowercase tailnet FQDN as `Host`
+without `:443`; the listener now adopts that value only through exact configured
+authority pinning. The live manual-client matrix proved forwarded capability,
+wrong-bearer rejection, unknown-context rejection, one no-side-effect dispatch,
+identical durable replay, and replay-conflict rejection. It did not prove
+iPhone Keychain provisioning, Swift control, App Intent, background service, or
+phone action.
 Stop's future App Intent authentication policy is also unselected; the physical
 Stop control must explicitly require authentication before it can be treated as
 lock-screen-safe. Those are separately gated phases.

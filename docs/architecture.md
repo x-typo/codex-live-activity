@@ -394,11 +394,12 @@ the foreground composer unless encrypted draft retention is separately chosen.
 The current implementation supplies the strict JSON adapter boundary, one-task
 context registry, owner-private secret loader/verifier, durable file replay
 store, and `src/localhost-turn-action-listener.mjs`. The listener factory is
-closed by default and has no standalone executable entry point. Its explicit one-shot
-`start()` accepts only a validated port and hard-codes literal `127.0.0.1`; it
-does not accept a host, DNS name, wildcard, IPv6, LAN, or Tailscale address. The
-bound address is checked after startup, and a failed fixed-port bind never
-falls back to another port or interface.
+closed by default. Its explicit one-shot `start()` accepts only a validated port
+and an optional bounded ASCII DNS authority. The authority controls only the
+exact HTTP `Host` comparison; it can never change the hard-coded literal
+`127.0.0.1` bind. When omitted, the expected authority remains
+`127.0.0.1:<bound-port>`. The bound address is checked after startup, and a
+failed fixed-port bind never falls back to another port or interface.
 
 Before the pure handler runs, the adapter requires exact HTTP/1.1 method, target,
 and local `Host`, rejects transfer encoding, content encoding, trailers,
@@ -426,14 +427,40 @@ The relay's opt-in proof mode supplies synthetic owner-private files, self-drive
 one Reply and one Stop over that socket, and requires both App Server acceptance
 and the matching interrupted lifecycle before cleanup.
 
+`bin/codex-tailscale-admission-proof.mjs` is a separate foreground-only live
+admission seam. It loads pre-created external server-token and HMAC files plus
+the durable replay root, binds one fixed loopback port with the observed Serve
+authority, and emits only a public content-free Stop template and opaque
+control context. An external proof client must hold a separate copy of the
+bearer; the HMAC key remains Mac-only. The client never supplies the capability
+header because Serve must strip any incoming copy and inject the granted value.
+The executable dispatches only to a no-side-effect stub that returns correlated
+`noActiveTurn`, admits only a complete parsed action matching the emitted Stop
+body before fingerprint or replay state, fails on a second authenticated
+dispatch, and closes on signal, timeout, or failure. The external client owns
+proof that the first and retry receipts are byte-identical; the executable
+independently reports one dispatch. It has no stdout heartbeat, so silent output
+loss is detected only by a later write and cleanup is bounded by the configured
+timeout rather than immediate.
+
 The synthetic capability header used by this local proof is forgeable by other
 local processes and is not evidence of Tailscale admission. The proof supplies
-no real token generation or phone pairing, Keychain adapter, Tailscale
-configuration, Swift UI, App Intent, or persistent service. The later Serve
-phase must observe the actual forwarded `Host` before selecting its exact
-configured authority. Durable replay records are retained indefinitely by the
-production boundary; only the proof's entire disposable root is deleted after
-the listener closes.
+no real token generation or phone pairing, Keychain adapter, Swift UI, App
+Intent, or persistent service. The separately approved live Serve proof
+observed the lowercase tailnet FQDN without `:443` as the exact forwarded Host,
+confirmed the granted parameterless capability header, and exercised this
+matrix through tailnet HTTPS: wrong bearer (`unauthorized`), unknown context,
+one valid no-side-effect dispatch, identical completed replay, and changed-body
+`replayConflict`. Foreground Serve and the marked proof grant are disposable;
+HTTPS certificate enablement is a separate persistent tailnet setting whose
+certificate name is published through Certificate Transparency. Durable replay
+records are retained indefinitely by the production boundary; only the proof's
+entire disposable root is deleted after the listener closes.
+
+That live evidence is a manual two-endpoint protocol pair on the Mac. It is not
+evidence that an iPhone installation imported the bearer, stored it in Keychain,
+received the public control context, or invoked a Live Activity control. Those
+remain the next protected device boundary.
 
 An App Intent's authentication policy defaults to `alwaysAllowed`, including
 when the device is locked. The future Stop `LiveActivityIntent` must therefore

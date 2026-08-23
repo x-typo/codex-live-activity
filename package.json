@@ -7,6 +7,7 @@
     "apns-sender": "node bin/codex-live-activity-apns-sender.mjs",
     "harness": "node bin/codex-status-harness.mjs",
     "relay": "node bin/codex-one-task-relay.mjs",
+    "tailscale-admission-proof": "node bin/codex-tailscale-admission-proof.mjs",
     "test": "node --test"
   },
   "engines": {

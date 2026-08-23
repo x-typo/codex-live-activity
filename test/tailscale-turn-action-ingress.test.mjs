@@ -122,6 +122,7 @@ class DeterministicReplayStore {
 function createHarness({
   replayStore = new DeterministicReplayStore(),
   contextExpiresAtMs = NOW + 120_000,
+  admitAction,
   resolve = true,
   activeTurnId = "turn-active",
   dispatchOverride,
@@ -145,6 +146,7 @@ function createHarness({
     },
   });
   let authorizationCalls = 0;
+  let admissionCalls = 0;
   let resolutionCalls = 0;
   let fingerprintCalls = 0;
   const fingerprint = createRemoteActionHmacFingerprint(
@@ -156,6 +158,14 @@ function createHarness({
       authorizationCalls += 1;
       return token === APP_TOKEN ? authorizedInstallationId : null;
     },
+    ...(admitAction === undefined
+      ? {}
+      : {
+          admitAction: (action) => {
+            admissionCalls += 1;
+            return admitAction(action);
+          },
+        }),
     resolveControlContext: async (request) => {
       resolutionCalls += 1;
       if (resolveControlContextOverride) {
@@ -192,6 +202,9 @@ function createHarness({
     get authorizationCalls() {
       return authorizationCalls;
     },
+    get admissionCalls() {
+      return admissionCalls;
+    },
     get resolutionCalls() {
       return resolutionCalls;
     },
@@ -200,6 +213,44 @@ function createHarness({
     },
   };
 }
+
+test("an optional action gate runs before fingerprint, replay, context, or dispatch", async () => {
+  const expected = remoteStop();
+  const state = createHarness({
+    admitAction: (action) =>
+      Object.keys(action).length === Object.keys(expected).length &&
+      Object.entries(expected).every(([key, value]) => action[key] === value),
+  });
+
+  const altered = await state.handler(
+    requestFor(
+      remoteStop({ issuedAt: "2026-08-22T20:00:00.001Z" }),
+    ),
+  );
+  assert.equal(altered.statusCode, 400);
+  assert.deepEqual(receiptFrom(altered), {
+    schemaVersion: 1,
+    actionId: expected.actionId,
+    action: expected.action,
+    outcome: "rejected",
+    reason: "invalidRequest",
+  });
+  assert.equal(state.admissionCalls, 1);
+  assert.equal(state.fingerprintCalls, 0);
+  assert.deepEqual(state.replayStore.inspectCalls, []);
+  assert.deepEqual(state.replayStore.claimCalls, []);
+  assert.equal(state.resolutionCalls, 0);
+  assert.deepEqual(state.requests, []);
+
+  const accepted = await state.handler(requestFor(expected));
+  assert.equal(accepted.statusCode, 200);
+  assert.equal(state.admissionCalls, 2);
+  assert.equal(state.fingerprintCalls, 1);
+  assert.equal(state.replayStore.inspectCalls.length, 1);
+  assert.equal(state.replayStore.claimCalls.length, 1);
+  assert.equal(state.resolutionCalls, 2);
+  assert.equal(state.requests.length, 1);
+});
 
 test("the remote schema carries opaque correlation and excludes private task IDs", () => {
   assert.deepEqual(validateJsonSchema(remoteStop(), remoteActionSchema), []);
