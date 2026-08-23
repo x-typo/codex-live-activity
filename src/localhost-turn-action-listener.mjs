@@ -22,6 +22,7 @@ export const LOCALHOST_KEEP_ALIVE_TIMEOUT_MS = 1_000;
 export const LOCALHOST_SHUTDOWN_GRACE_MS = 5_000;
 export const LOCALHOST_MAX_CONNECTIONS = 32;
 export const LOCALHOST_MAX_HEADERS = 32;
+export const LOCALHOST_MAX_EXPECTED_AUTHORITY_BYTES = 255;
 
 const FORWARDED_HEADERS = new Set([
   "authorization",
@@ -292,6 +293,84 @@ function validatePort(port) {
   }
 }
 
+function validateExpectedAuthority(expectedAuthority) {
+  if (
+    typeof expectedAuthority !== "string" ||
+    expectedAuthority.length === 0 ||
+    Buffer.byteLength(expectedAuthority) >
+      LOCALHOST_MAX_EXPECTED_AUTHORITY_BYTES ||
+    !/^[\x21-\x7e]+$/u.test(expectedAuthority) ||
+    /[@/?#\\]/u.test(expectedAuthority)
+  ) {
+    throw new TypeError(
+      "expectedAuthority must be a bounded ASCII DNS authority",
+    );
+  }
+
+  const separatorIndex = expectedAuthority.lastIndexOf(":");
+  if (
+    separatorIndex !== -1 &&
+    separatorIndex !== expectedAuthority.indexOf(":")
+  ) {
+    throw new TypeError(
+      "expectedAuthority must be a bounded ASCII DNS authority",
+    );
+  }
+  const hostname =
+    separatorIndex === -1
+      ? expectedAuthority
+      : expectedAuthority.slice(0, separatorIndex);
+  const port =
+    separatorIndex === -1 ? null : expectedAuthority.slice(separatorIndex + 1);
+  if (
+    hostname.length === 0 ||
+    (port !== null &&
+      (!/^(?:[1-9]\d{0,4})$/u.test(port) || Number(port) > 65_535))
+  ) {
+    throw new TypeError(
+      "expectedAuthority must be a bounded ASCII DNS authority",
+    );
+  }
+
+  let parsed;
+  try {
+    parsed = new URL(`http://${expectedAuthority}/`);
+  } catch {
+    throw new TypeError(
+      "expectedAuthority must be a bounded ASCII DNS authority",
+    );
+  }
+  const parsedPort =
+    parsed.port === "" && port === "80" ? "80" : parsed.port;
+  if (
+    parsed.username !== "" ||
+    parsed.password !== "" ||
+    parsed.hostname !== hostname.toLowerCase() ||
+    (port !== null && parsedPort !== port)
+  ) {
+    throw new TypeError(
+      "expectedAuthority must be a bounded ASCII DNS authority",
+    );
+  }
+
+  const labels = hostname.split(".");
+  const isDnsName =
+    hostname.length <= 253 &&
+    labels.length > 1 &&
+    /[A-Za-z]/u.test(hostname) &&
+    labels.every(
+      (label) =>
+        label.length <= 63 &&
+        /^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?$/u.test(label),
+    );
+  if (!isDnsName) {
+    throw new TypeError(
+      "expectedAuthority must be a bounded ASCII DNS authority",
+    );
+  }
+  return expectedAuthority;
+}
+
 export function createLocalhostTurnActionListener({
   handleRequest,
   revokeControlContexts,
@@ -340,8 +419,10 @@ export function createLocalhostTurnActionListener({
   let closePromise = null;
   let closed = false;
 
-  const start = ({ port = 0 } = {}) => {
+  const start = ({ port = 0, expectedAuthority: authority } = {}) => {
     validatePort(port);
+    const configuredAuthority =
+      authority === undefined ? null : validateExpectedAuthority(authority);
     if (closing || closed) throw new Error("listener is closing or closed");
     if (startCalled) throw new Error("listener start may be called only once");
     startCalled = true;
@@ -370,7 +451,9 @@ export function createLocalhostTurnActionListener({
           server.closeAllConnections();
           return;
         }
-        expectedAuthority = `${LOCALHOST_TURN_ACTION_HOST}:${address.port}`;
+        expectedAuthority =
+          configuredAuthority ??
+          `${LOCALHOST_TURN_ACTION_HOST}:${address.port}`;
         resolve(
           Object.freeze({
             host: LOCALHOST_TURN_ACTION_HOST,

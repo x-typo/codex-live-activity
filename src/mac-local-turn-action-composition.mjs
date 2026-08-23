@@ -17,6 +17,7 @@ function readNow(now) {
 export async function createMacLocalTurnActionComposition({
   installationId,
   expectedCapability,
+  admitAction,
   appTokenPath,
   hmacKeyPath,
   replayDirectoryPath,
@@ -53,6 +54,7 @@ export async function createMacLocalTurnActionComposition({
     const handler = createTailscaleTurnActionRequestHandler({
       expectedCapability,
       authorizeAppToken: secrets.authorizeAppToken,
+      ...(admitAction === undefined ? {} : { admitAction }),
       resolveControlContext: (request) => registry.resolve(request),
       replayStore,
       fingerprintAction: secrets.fingerprintAction,

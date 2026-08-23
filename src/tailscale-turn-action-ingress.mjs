@@ -116,7 +116,7 @@ function hasTailscaleCapability(header, expectedCapability) {
     return (
       Array.isArray(grants) &&
       grants.length > 0 &&
-      grants.every((grant) => isObject(grant))
+      grants.every((grant) => hasExactKeys(grant, []))
     );
   } catch {
     return false;
@@ -411,6 +411,7 @@ export function createRemoteActionHmacFingerprint(key) {
 export function createTailscaleTurnActionRequestHandler({
   expectedCapability,
   authorizeAppToken,
+  admitAction,
   resolveControlContext,
   replayStore,
   fingerprintAction,
@@ -423,6 +424,9 @@ export function createTailscaleTurnActionRequestHandler({
   }
   if (typeof authorizeAppToken !== "function") {
     throw new TypeError("authorizeAppToken must be a function");
+  }
+  if (admitAction !== undefined && typeof admitAction !== "function") {
+    throw new TypeError("admitAction must be a function");
   }
   if (typeof resolveControlContext !== "function") {
     throw new TypeError("resolveControlContext must be a function");
@@ -517,6 +521,16 @@ export function createTailscaleTurnActionRequestHandler({
     }
     if (nowMs >= expiresAtMs) {
       return response(409, rejected("expiredRequest", action));
+    }
+
+    if (admitAction !== undefined) {
+      let admitted = false;
+      try {
+        admitted = admitAction(action) === true;
+      } catch {}
+      if (!admitted) {
+        return response(400, rejected("invalidRequest", action));
+      }
     }
 
     let fingerprint;

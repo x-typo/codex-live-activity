@@ -370,7 +370,7 @@ function sendLoopbackProofAction({ address, appToken, action }) {
           "content-length": body.byteLength,
           "content-type": "application/json",
           "tailscale-app-capabilities": JSON.stringify({
-            [LOOPBACK_PROOF_CAPABILITY]: [{ source: ["synthetic-local-proof"] }],
+            [LOOPBACK_PROOF_CAPABILITY]: [{}],
           }),
         },
       },
