@@ -52,6 +52,35 @@ Server request stops the dry run because this prototype does not implement an
 approval or user-input UI; those remain Mac-side responsibilities for a later
 phase.
 
+The executable also has one explicit composition-proof mode:
+
+```sh
+printf '%s' 'Run a bounded wait and do nothing else.' \
+  | npm run --silent relay -- --cwd "$PWD" --loopback-action-proof
+```
+
+That mode creates synthetic 32-byte token and HMAC files plus a replay root in
+one owner-private disposable directory outside the repository, starts the
+existing listener on an ephemeral `127.0.0.1` port, and issues one control
+context only after the `turn/start` response and matching `turn/started`
+notification agree. A bounded activation deadline begins when `turn/start` is
+sent and fails closed unless both halves of that correlation arrive. An
+internal proof client then sends one Reply and one Stop through the complete
+listener, ingress, replay, context,
+action-boundary, and App Server stdio path. Success requires accepted
+`turn/steer` and `turn/interrupt` responses plus a matching
+`turn/completed: interrupted`
+lifecycle event. The listener, secrets, replay state, and App Server SQLite home
+are closed and deletion-verified before exit.
+
+This flag is a local composition smoke, not an authentication or deployment
+mode. Its locally forged Tailscale capability header and synthetic bearer prove
+only that the selected components connect correctly; they do not prove
+Tailscale Serve admission. The port, control context, token, private thread and
+turn IDs, task input, and Reply text never enter stdout or the safe proof-status
+lines on stderr. Tailscale remains unconfigured and no phone or APNs action is
+performed.
+
 ## Mock interactive turn actions
 
 [`schema/relay-turn-action.v1.schema.json`](schema/relay-turn-action.v1.schema.json)
@@ -89,16 +118,16 @@ turn.
 Only allowlisted receipts leave the mock boundary. They contain the action ID,
 action kind, outcome, safe reason, and App Server method; they never contain
 reply text, thread ID, turn ID, raw App Server errors, or task content. Reply
-text is forwarded unchanged only in the in-memory App Server request. If this
-contract is later connected to the existing executable, App Server may also
-hold that text in its deletion-verified disposable state, just as it does for
-the initial task input.
+text is forwarded unchanged only in the in-memory App Server request. In the
+explicit loopback proof mode, App Server may also hold that text in its
+deletion-verified disposable state, just as it does for the initial task input.
 
 This mock boundary is not a network protocol or phone feature. Its recent
 in-process action-ID window remains deterministic duplicate protection, not
 authentication or durable replay defense. The selected return layer below now
-supplies those outer controls and a literal-loopback adapter, but it is not wired
-to the relay executable, App Server process, or device.
+supplies those outer controls and a literal-loopback adapter. The executable's
+opt-in proof mode wires that path to one disposable App Server task, but no
+device, persistent service, or real credential is connected.
 
 ## Localhost return-path adapter
 
@@ -197,13 +226,14 @@ listener. The listener independently parses the submitted envelope through the
 ingress validator, rejects mismatched or semantically impossible handler
 receipts, and emits fixed-order JSON bytes.
 
-The adapter has no CLI and is not a persistent service. Deterministic tests open
-it on an ephemeral loopback port with synthetic temporary secrets and replay
-state, send real local HTTP requests, then close it and remove that state. No
-real credential or Keychain provisioning, Tailscale Serve or policy
-configuration, Swift control, background daemon, live App Server wiring, or
-phone action exists. The later Serve phase must observe and explicitly adopt its
-forwarded `Host`; it must not weaken the local proof by guessing an authority.
+The adapter has no standalone CLI and is not a persistent service. Deterministic
+tests and the relay's explicit composition-proof mode open it on an ephemeral
+loopback port with synthetic temporary secrets and replay state, send real local
+HTTP requests, then close it and remove that state. No real credential or
+Keychain provisioning, Tailscale Serve or policy configuration, Swift control,
+background daemon, or phone action exists. The later Serve phase must observe
+and explicitly adopt its forwarded `Host`; it must not weaken the local proof by
+guessing an authority.
 Stop's future App Intent authentication policy is also unselected; the physical
 Stop control must explicitly require authentication before it can be treated as
 lock-screen-safe. Those are separately gated phases.

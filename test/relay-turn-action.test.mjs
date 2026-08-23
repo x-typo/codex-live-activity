@@ -5,6 +5,7 @@ import test from "node:test";
 import {
   MAX_REPLY_CODE_POINTS,
   MockOneTaskTurnActionBoundary,
+  RelayTurnActionOutcomeUnknownError,
 } from "../src/relay-turn-action.mjs";
 import {
   JsonlDryRunApnsTransport,
@@ -460,11 +461,52 @@ test("a rejected Stop releases its pending latch", async () => {
   assert.equal(JSON.stringify(result).includes("SENSITIVE"), false);
 });
 
-test("fails closed on rejected or mismatched App Server responses", async () => {
+test("propagates an uncertain Stop outcome and retains its pending latch", async () => {
+  const actionState = createBoundary({
+    responder: () => {
+      throw new RelayTurnActionOutcomeUnknownError();
+    },
+  });
+
+  await assert.rejects(
+    actionState.boundary.dispatch(
+      stopAction({ actionId: "action-uncertain-stop-1" }),
+    ),
+    RelayTurnActionOutcomeUnknownError,
+  );
+  assert.equal(actionState.boundary.stopPending, true);
+  actionState.boundary.clearStopPending();
+  assert.equal(actionState.boundary.stopPending, false);
+});
+
+test("returns a content-free rejection for an explicit correlated App Server error", async () => {
+  const actionState = createBoundary({
+    responder: (request) => ({
+      id: request.id,
+      error: { message: "SENSITIVE_ERROR" },
+    }),
+  });
+  const action = replyAction({ actionId: "action-error-0" });
+  const result = await actionState.boundary.dispatch(action);
+  assert.equal(result.outcome, "rejected");
+  assert.equal(result.reason, "appServerRejected");
+  assert.equal(JSON.stringify(result).includes("SENSITIVE"), false);
+  assert.equal(
+    (await actionState.boundary.dispatch(action)).reason,
+    "duplicateAction",
+  );
+});
+
+test("treats malformed or mismatched App Server responses as outcome unknown", async () => {
   const cases = [
     () => ({ id: "wrong-id", result: { turnId: "turn-active" } }),
-    (request) => ({ id: request.id, error: { message: "SENSITIVE_ERROR" } }),
     (request) => ({ id: request.id, result: { turnId: "turn-other" } }),
+    (request) => ({ id: request.id, result: null }),
+    (request) => ({
+      id: request.id,
+      error: { message: "SENSITIVE_AMBIGUOUS_ERROR" },
+      result: { turnId: "turn-active" },
+    }),
     () => {
       throw new Error("SENSITIVE_THROWN_ERROR");
     },
@@ -472,14 +514,31 @@ test("fails closed on rejected or mismatched App Server responses", async () => 
 
   for (const [index, responder] of cases.entries()) {
     const actionState = createBoundary({ responder });
-    const action = replyAction({ actionId: `action-error-${index}` });
-    const result = await actionState.boundary.dispatch(action);
-    assert.equal(result.outcome, "rejected");
-    assert.equal(result.reason, "appServerRejected");
-    assert.equal(JSON.stringify(result).includes("SENSITIVE"), false);
+    const action = replyAction({ actionId: `action-uncertain-${index}` });
+    await assert.rejects(
+      actionState.boundary.dispatch(action),
+      RelayTurnActionOutcomeUnknownError,
+    );
     assert.equal(
       (await actionState.boundary.dispatch(action)).reason,
       "duplicateAction",
     );
   }
+});
+
+test("retains Stop pending after a malformed correlated success response", async () => {
+  const actionState = createBoundary({
+    responder: (request) => ({
+      id: request.id,
+      result: { unexpected: "SENSITIVE_RESULT" },
+    }),
+  });
+
+  await assert.rejects(
+    actionState.boundary.dispatch(
+      stopAction({ actionId: "action-malformed-stop-1" }),
+    ),
+    RelayTurnActionOutcomeUnknownError,
+  );
+  assert.equal(actionState.boundary.stopPending, true);
 });
