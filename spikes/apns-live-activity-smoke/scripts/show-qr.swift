@@ -17,7 +17,16 @@ private func readPayload() throws -> Data {
     }
 
     // Read only enough to validate the maximum permitted payload plus its newline.
-    var payload = try FileHandle.standardInput.read(upToCount: 1_026) ?? Data()
+    let maximumBufferedBytes = 1_026
+    var payload = Data()
+    while payload.count < maximumBufferedBytes {
+        let remainingBytes = maximumBufferedBytes - payload.count
+        guard let chunk = try FileHandle.standardInput.read(upToCount: remainingBytes),
+              !chunk.isEmpty else {
+            break
+        }
+        payload.append(chunk)
+    }
     guard !payload.isEmpty else { throw PresenterError.invalidInput }
 
     if payload.last == 0x0A {
