@@ -206,12 +206,13 @@ defines the phone-facing wire envelope. It carries an opaque, short-lived
 
 `src/tailscale-turn-action-ingress.mjs` is a pure, injected request handler. It
 opens no socket and changes no Tailscale state. Before resolving a context, it
-requires both a forwarded `Tailscale-App-Capabilities` grant and a paired
-per-install app-token verifier. `src/strict-json.mjs` rejects duplicate raw JSON
-members, including escaped-equivalent names, in both the capability header and
-action body before object validation. A live adapter must keep the paired token
-in the iPhone and Mac Keychains; it must never place it in APNs, a URL, this
-repository, or a log.
+requires both the exact forwarded parameterless
+`Tailscale-App-Capabilities` grant, represented by one or more empty objects,
+and a paired per-install app-token verifier. `src/strict-json.mjs` rejects
+duplicate raw JSON members, including escaped-equivalent names, in both the
+capability header and action body before object validation. A live adapter must
+keep the paired token in the iPhone and Mac Keychains; it must never place it in
+APNs, a URL, this repository, or a log.
 
 `src/remote-action-control.mjs` implements the private one-task context registry.
 It issues exactly 32 random bytes as a 43-character base64url identifier, binds

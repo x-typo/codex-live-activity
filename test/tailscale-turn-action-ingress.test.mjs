@@ -59,7 +59,7 @@ function requestFor(action, overrides = {}) {
       "content-type": "application/json",
       authorization: `Bearer ${APP_TOKEN}`,
       "tailscale-app-capabilities": JSON.stringify({
-        [CAPABILITY]: [{ source: ["self"] }],
+        [CAPABILITY]: [{}],
       }),
     },
     body: JSON.stringify(action),
@@ -392,6 +392,21 @@ test("requires both Tailscale capability and paired app authorization", async ()
   assert.equal(missingCapability.authorizationCalls, 0);
   assert.equal(missingCapability.resolutionCalls, 0);
 
+  const parameterizedCapability = createHarness();
+  const headersWithParameters = {
+    ...requestFor(remoteStop()).headers,
+    "tailscale-app-capabilities": JSON.stringify({
+      [CAPABILITY]: [{ unexpected: true }],
+    }),
+  };
+  const parameterizedResult = await parameterizedCapability.handler(
+    requestFor(remoteStop(), { headers: headersWithParameters }),
+  );
+  assert.equal(parameterizedResult.statusCode, 401);
+  assert.equal(receiptFrom(parameterizedResult).reason, "unauthorized");
+  assert.equal(parameterizedCapability.authorizationCalls, 0);
+  assert.equal(parameterizedCapability.resolutionCalls, 0);
+
   const wrongToken = createHarness();
   const badHeaders = {
     ...requestFor(remoteStop()).headers,
@@ -448,7 +463,7 @@ test("rejects duplicate action members before fingerprint, replay, or context se
 test("rejects duplicate capability members before app authorization", async () => {
   const state = createHarness();
   const capability = JSON.stringify({
-    [CAPABILITY]: [{ source: ["self"] }],
+    [CAPABILITY]: [{}],
   });
   const request = requestFor(remoteStop());
   request.headers["tailscale-app-capabilities"] = `${capability.slice(

@@ -137,7 +137,7 @@ test("wires the hardened seams through literal localhost without retained task c
         "content-type": "application/json",
         authorization: `Bearer ${APP_TOKEN}`,
         "tailscale-app-capabilities": JSON.stringify({
-          [CAPABILITY]: [{ source: ["self"] }],
+          [CAPABILITY]: [{}],
         }),
       },
       body: JSON.stringify(action),

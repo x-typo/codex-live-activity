@@ -340,11 +340,13 @@ function validateExpectedAuthority(expectedAuthority) {
       "expectedAuthority must be a bounded ASCII DNS authority",
     );
   }
+  const parsedPort =
+    parsed.port === "" && port === "80" ? "80" : parsed.port;
   if (
     parsed.username !== "" ||
     parsed.password !== "" ||
     parsed.hostname !== hostname.toLowerCase() ||
-    (port !== null && parsed.port !== port)
+    (port !== null && parsedPort !== port)
   ) {
     throw new TypeError(
       "expectedAuthority must be a bounded ASCII DNS authority",

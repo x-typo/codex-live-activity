@@ -116,7 +116,7 @@ function hasTailscaleCapability(header, expectedCapability) {
     return (
       Array.isArray(grants) &&
       grants.length > 0 &&
-      grants.every((grant) => isObject(grant))
+      grants.every((grant) => hasExactKeys(grant, []))
     );
   } catch {
     return false;

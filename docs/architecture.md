@@ -262,8 +262,9 @@ the displayed control still targets the same turn, that an action is fresh or
 not replayed, that App Server accepted it, or that the Mac is reachable.
 Accordingly, the sidecar must require both:
 
-- the expected app capability in Tailscale's forwarded
-  `Tailscale-App-Capabilities` JSON header; and
+- the exact parameterless app capability in Tailscale's forwarded
+  `Tailscale-App-Capabilities` JSON header, with no accepted parameter fields;
+  and
 - a paired per-install bearer verified against owner-private Mac state, with the
   phone copy held in Keychain.
 

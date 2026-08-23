@@ -37,7 +37,7 @@ function sendAction(port, action) {
           "content-length": body.byteLength,
           "content-type": "application/json",
           "tailscale-app-capabilities": JSON.stringify({
-            [CAPABILITY]: [{ source: ["synthetic-test"] }],
+            [CAPABILITY]: [{}],
           }),
         },
       },

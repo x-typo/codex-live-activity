@@ -249,26 +249,30 @@ test("admits only the exact configured forwarded authority and closes cleanly", 
   await expectConnectionFailure({ host: LOCALHOST_TURN_ACTION_HOST, port });
 });
 
-test("admits the exact configured forwarded FQDN without a port", async () => {
-  const expectedAuthority = "relay-node.example.ts.net";
-  let handled = 0;
-  const listener = createLocalhostTurnActionListener({
-    handleRequest: async () => {
-      handled += 1;
-      return ingressResponse();
-    },
-    revokeControlContexts: () => {},
-  });
-  const { port } = await listener.start({ expectedAuthority });
-  try {
-    const result = await requestListener({
-      port,
-      headers: { host: expectedAuthority },
+test("admits an exact forwarded FQDN with no port or explicit port 80", async () => {
+  for (const expectedAuthority of [
+    "relay-node.example.ts.net",
+    "relay-node.example.ts.net:80",
+  ]) {
+    let handled = 0;
+    const listener = createLocalhostTurnActionListener({
+      handleRequest: async () => {
+        handled += 1;
+        return ingressResponse();
+      },
+      revokeControlContexts: () => {},
     });
-    assert.equal(result.statusCode, 200);
-    assert.equal(handled, 1);
-  } finally {
-    await listener.close();
+    const { port } = await listener.start({ expectedAuthority });
+    try {
+      const result = await requestListener({
+        port,
+        headers: { host: expectedAuthority },
+      });
+      assert.equal(result.statusCode, 200);
+      assert.equal(handled, 1);
+    } finally {
+      await listener.close();
+    }
   }
 });
 
