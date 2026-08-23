@@ -381,8 +381,9 @@ classifies the handler call as invalid content type, invalid action, or valid
 action, and reserializes every admitted receipt into fixed field order. The
 table permits only the ingress outcomes possible in that observed phase. Mixed
 nullability, a different action ID or kind, and any reason/status/correlation or
-handler-phase combination outside the table fail closed as an uncorrelated
-`unavailable` adapter response.
+handler-phase combination outside the table fail closed as an `unavailable`
+adapter response. That fallback retains the exact submitted action only after
+the action has already been validated; otherwise it is uncorrelated.
 
 There is no server or cloud command queue. If the Mac, Tailscale, ingress, replay
 store, or App Server is unavailable, the phone reports not delivered or outcome

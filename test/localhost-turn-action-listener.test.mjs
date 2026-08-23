@@ -4,6 +4,7 @@ import { connect } from "node:net";
 import test from "node:test";
 
 import {
+  LOCALHOST_SHUTDOWN_GRACE_MS,
   LOCALHOST_TURN_ACTION_HOST,
   createLocalhostTurnActionListener,
 } from "../src/localhost-turn-action-listener.mjs";
@@ -685,6 +686,54 @@ test("close stops acceptance, revokes controls, and lets an active handler finis
   assert.equal((await pendingRequest).statusCode, 200);
   await pendingClose;
   assert.deepEqual(events, ["handler-started", "revoked", "handler-finished"]);
+});
+
+test("close force-closes an active request after the grace period", async () => {
+  let markStarted;
+  let releaseHandler;
+  let handlerReleased = false;
+  const started = new Promise((resolve) => {
+    markStarted = resolve;
+  });
+  const release = new Promise((resolve) => {
+    releaseHandler = () => {
+      if (handlerReleased) return;
+      handlerReleased = true;
+      resolve();
+    };
+  });
+  const listener = createLocalhostTurnActionListener({
+    handleRequest: async () => {
+      markStarted();
+      await release;
+      return ingressResponse();
+    },
+    revokeControlContexts: () => {},
+  });
+  const { port } = await listener.start();
+  const pendingRequest = requestListener({ port });
+  await started;
+
+  const recoveryTimer = setTimeout(
+    releaseHandler,
+    LOCALHOST_SHUTDOWN_GRACE_MS + 2_000,
+  );
+  try {
+    const pendingClose = listener.close();
+    const requestOutcome = await pendingRequest.then(
+      (value) => ({ state: "fulfilled", value }),
+      (error) => ({ state: "rejected", error }),
+    );
+    await pendingClose;
+
+    assert.equal(handlerReleased, false);
+    assert.equal(requestOutcome.state, "rejected");
+    assert.ok(requestOutcome.error instanceof Error);
+  } finally {
+    clearTimeout(recoveryTimer);
+    releaseHandler();
+    await listener.close();
+  }
 });
 
 test("close is reentrant and prevents reentrant or later startup", async () => {
