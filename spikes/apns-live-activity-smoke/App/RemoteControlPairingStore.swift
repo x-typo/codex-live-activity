@@ -36,6 +36,9 @@ struct RemoteControlKeychainOperations: @unchecked Sendable {
 struct RemoteControlPairingStore: Sendable {
     private static let service = "com.xtypo.CodexLiveActivitySmoke.remote-control"
     private static let account = "paired-installation-v1"
+    private static let transactionQueue = DispatchQueue(
+        label: "com.xtypo.CodexLiveActivitySmoke.remote-control-keychain"
+    )
 
     private let operations: RemoteControlKeychainOperations
 
@@ -53,38 +56,12 @@ struct RemoteControlPairingStore: Sendable {
                 throw RemoteControlPairingStoreError.writeFailed
             }
 
-            var attributes = Self.baseQuery()
-            attributes[kSecValueData] = pairingPayload
-            attributes[kSecAttrAccessible] = kSecAttrAccessibleWhenUnlockedThisDeviceOnly
-
-            let status = operations.add(attributes)
-            if status == errSecDuplicateItem {
-                let updateStatus = operations.update(
-                    Self.baseQuery(),
-                    [
-                        kSecValueData: pairingPayload,
-                        kSecAttrAccessible: kSecAttrAccessibleWhenUnlockedThisDeviceOnly
-                    ]
+            return try Self.transactionQueue.sync {
+                try Self.storeAndVerify(
+                    pairingPayload: pairingPayload,
+                    credential: credential,
+                    operations: operations
                 )
-                guard updateStatus == errSecSuccess else {
-                    throw RemoteControlPairingStoreError.writeFailed
-                }
-            } else if status != errSecSuccess {
-                throw RemoteControlPairingStoreError.writeFailed
-            }
-
-            do {
-                let stored = try Self.load(operations: operations)
-                guard stored == credential else {
-                    throw RemoteControlPairingStoreError.writeFailed
-                }
-                return stored
-            } catch {
-                let cleanupStatus = operations.delete(Self.baseQuery())
-                guard cleanupStatus == errSecSuccess || cleanupStatus == errSecItemNotFound else {
-                    throw RemoteControlPairingStoreError.writeOutcomeUnknown
-                }
-                throw RemoteControlPairingStoreError.writeFailed
             }
         }.value
     }
@@ -92,18 +69,62 @@ struct RemoteControlPairingStore: Sendable {
     func load() async throws -> PairingCredential {
         let operations = operations
         return try await Task.detached(priority: .userInitiated) {
-            try Self.load(operations: operations)
+            try Self.transactionQueue.sync {
+                try Self.load(operations: operations)
+            }
         }.value
     }
 
     func remove() async throws {
         let operations = operations
         try await Task.detached(priority: .userInitiated) {
-            let status = operations.delete(Self.baseQuery())
-            guard status == errSecSuccess || status == errSecItemNotFound else {
-                throw RemoteControlPairingStoreError.unavailable
+            try Self.transactionQueue.sync {
+                let status = operations.delete(Self.baseQuery())
+                guard status == errSecSuccess || status == errSecItemNotFound else {
+                    throw RemoteControlPairingStoreError.unavailable
+                }
             }
         }.value
+    }
+
+    private static func storeAndVerify(
+        pairingPayload: Data,
+        credential: PairingCredential,
+        operations: RemoteControlKeychainOperations
+    ) throws -> PairingCredential {
+        var attributes = baseQuery()
+        attributes[kSecValueData] = pairingPayload
+        attributes[kSecAttrAccessible] = kSecAttrAccessibleWhenUnlockedThisDeviceOnly
+
+        let status = operations.add(attributes)
+        if status == errSecDuplicateItem {
+            let updateStatus = operations.update(
+                baseQuery(),
+                [
+                    kSecValueData: pairingPayload,
+                    kSecAttrAccessible: kSecAttrAccessibleWhenUnlockedThisDeviceOnly
+                ]
+            )
+            guard updateStatus == errSecSuccess else {
+                throw RemoteControlPairingStoreError.writeFailed
+            }
+        } else if status != errSecSuccess {
+            throw RemoteControlPairingStoreError.writeFailed
+        }
+
+        do {
+            let stored = try load(operations: operations)
+            guard stored == credential else {
+                throw RemoteControlPairingStoreError.writeFailed
+            }
+            return stored
+        } catch {
+            let cleanupStatus = operations.delete(baseQuery())
+            guard cleanupStatus == errSecSuccess || cleanupStatus == errSecItemNotFound else {
+                throw RemoteControlPairingStoreError.writeOutcomeUnknown
+            }
+            throw RemoteControlPairingStoreError.writeFailed
+        }
     }
 
     private static func load(

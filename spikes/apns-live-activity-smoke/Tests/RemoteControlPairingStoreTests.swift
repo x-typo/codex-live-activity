@@ -36,6 +36,52 @@ final class RemoteControlPairingStoreTests: XCTestCase {
         XCTAssertEqual(loaded.origin.absoluteString, "https://other.example.ts.net")
     }
 
+    func testConcurrentSavesSerializeAcrossStoreInstances() async throws {
+        let firstPayload = pairingPayload()
+        let secondPayload = pairingPayload(origin: "https://other.example.ts.net")
+        let firstCopyGate = FirstCopyGate()
+        let secondWriteProbe = WriteAttemptProbe(expected: secondPayload)
+        let keychain = FakeKeychain(
+            beforeCopyData: { firstCopyGate.beforeCopy() },
+            onWriteAttempt: { data in secondWriteProbe.observe(data) }
+        )
+        let firstStore = RemoteControlPairingStore(operations: keychain.operations)
+        let secondStore = RemoteControlPairingStore(operations: keychain.operations)
+
+        let firstSave = Task {
+            try await firstStore.save(pairingPayload: firstPayload)
+        }
+        XCTAssertEqual(
+            firstCopyGate.started.wait(timeout: .now() + 2),
+            .success
+        )
+
+        let secondSaveStarted = DispatchSemaphore(value: 0)
+        let secondSave = Task {
+            secondSaveStarted.signal()
+            return try await secondStore.save(pairingPayload: secondPayload)
+        }
+        XCTAssertEqual(secondSaveStarted.wait(timeout: .now() + 2), .success)
+        XCTAssertEqual(
+            secondWriteProbe.observed.wait(timeout: .now() + 1),
+            .timedOut
+        )
+
+        firstCopyGate.release.signal()
+        let firstCredential = try await firstSave.value
+        XCTAssertEqual(
+            secondWriteProbe.observed.wait(timeout: .now() + 2),
+            .success
+        )
+        let secondCredential = try await secondSave.value
+
+        XCTAssertEqual(firstCredential.origin.absoluteString, "https://relay.example.ts.net")
+        XCTAssertEqual(secondCredential.origin.absoluteString, "https://other.example.ts.net")
+        let loaded = try await firstStore.load()
+        XCTAssertEqual(loaded, secondCredential)
+        XCTAssertEqual(keychain.deleteCount, 0)
+    }
+
     func testInvalidPayloadDoesNotTouchKeychain() async {
         let keychain = FakeKeychain()
         let store = RemoteControlPairingStore(operations: keychain.operations)
@@ -155,6 +201,42 @@ private func XCTAssertThrowsPairingStoreError(
     }
 }
 
+private final class FirstCopyGate: @unchecked Sendable {
+    let started = DispatchSemaphore(value: 0)
+    let release = DispatchSemaphore(value: 0)
+
+    private let lock = NSLock()
+    private var isFirstCopy = true
+
+    func beforeCopy() {
+        let shouldBlock = lock.withLock {
+            guard isFirstCopy else { return false }
+            isFirstCopy = false
+            return true
+        }
+        if shouldBlock {
+            started.signal()
+            _ = release.wait(timeout: .now() + 5)
+        }
+    }
+}
+
+private final class WriteAttemptProbe: @unchecked Sendable {
+    let observed = DispatchSemaphore(value: 0)
+
+    private let expected: Data
+
+    init(expected: Data) {
+        self.expected = expected
+    }
+
+    func observe(_ data: Data) {
+        if data == expected {
+            observed.signal()
+        }
+    }
+}
+
 private final class FakeKeychain: @unchecked Sendable {
     private let lock = NSLock()
     private var item: Data?
@@ -164,15 +246,21 @@ private final class FakeKeychain: @unchecked Sendable {
     private var lastAccessibilityValue: String?
     private let copyStatus: OSStatus?
     private let deleteStatus: OSStatus?
+    private let beforeCopyData: (@Sendable () -> Void)?
+    private let onWriteAttempt: (@Sendable (Data) -> Void)?
 
     init(
         storedData: Data? = nil,
         copyStatus: OSStatus? = nil,
-        deleteStatus: OSStatus? = nil
+        deleteStatus: OSStatus? = nil,
+        beforeCopyData: (@Sendable () -> Void)? = nil,
+        onWriteAttempt: (@Sendable (Data) -> Void)? = nil
     ) {
         item = storedData
         self.copyStatus = copyStatus
         self.deleteStatus = deleteStatus
+        self.beforeCopyData = beforeCopyData
+        self.onWriteAttempt = onWriteAttempt
     }
 
     var storedData: Data? {
@@ -198,22 +286,24 @@ private final class FakeKeychain: @unchecked Sendable {
     lazy var operations = RemoteControlKeychainOperations(
         add: { [weak self] attributes in
             guard let self else { return errSecNotAvailable }
+            guard let data = attributes[kSecValueData] as? Data else { return errSecParam }
+            self.onWriteAttempt?(data)
             return self.lock.withLock {
                 self.addCountValue += 1
                 self.lastAccessibilityValue = attributes[kSecAttrAccessible] as? String
                 guard self.item == nil else { return errSecDuplicateItem }
-                guard let data = attributes[kSecValueData] as? Data else { return errSecParam }
                 self.item = data
                 return errSecSuccess
             }
         },
         update: { [weak self] _, attributes in
             guard let self else { return errSecNotAvailable }
+            guard let data = attributes[kSecValueData] as? Data else { return errSecParam }
+            self.onWriteAttempt?(data)
             return self.lock.withLock {
                 self.updateCountValue += 1
                 self.lastAccessibilityValue = attributes[kSecAttrAccessible] as? String
-                guard self.item != nil,
-                      let data = attributes[kSecValueData] as? Data else {
+                guard self.item != nil else {
                     return errSecItemNotFound
                 }
                 self.item = data
@@ -222,6 +312,7 @@ private final class FakeKeychain: @unchecked Sendable {
         },
         copyData: { [weak self] _ in
             guard let self else { return (errSecNotAvailable, nil) }
+            self.beforeCopyData?()
             return self.lock.withLock {
                 if let copyStatus = self.copyStatus {
                     return (copyStatus, nil)
