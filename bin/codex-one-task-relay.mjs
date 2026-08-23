@@ -1791,18 +1791,31 @@ async function main() {
         writeStatus: writeSafeStderr,
       };
       let admittedAction = null;
+      const rejectUnexpectedAction = () => {
+        externalProof.unexpectedAction = true;
+        queueMicrotask(() => externalProof.onUnexpectedAction?.());
+        return false;
+      };
       actionComposition = await createMacLocalTurnActionComposition({
         installationId: EXTERNAL_STOP_PROOF_INSTALLATION_ID,
         expectedCapability: options.externalStopOptions.expectedCapability,
         admitAction: (action) => {
-          if (admittedAction === null && action.action === "stop") {
+          if (
+            action.action === "stop" &&
+            (admittedAction === null ||
+              isExactExternalStopProofAction(action, admittedAction))
+          ) {
+            return true;
+          }
+          return rejectUnexpectedAction();
+        },
+        admitResolvedAction: (action) => {
+          if (admittedAction === null) {
             admittedAction = action;
             return true;
           }
           if (isExactExternalStopProofAction(action, admittedAction)) return true;
-          externalProof.unexpectedAction = true;
-          queueMicrotask(() => externalProof.onUnexpectedAction?.());
-          return false;
+          return rejectUnexpectedAction();
         },
         appTokenPath: options.externalStopOptions.appTokenPath,
         hmacKeyPath: options.externalStopOptions.hmacKeyPath,

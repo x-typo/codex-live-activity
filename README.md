@@ -100,7 +100,8 @@ discarded. A same-item completion or a second distinct eligible command before
 authenticated Stop dispatch fails the proof closed. Pre-context App Server
 activation remains capped at 60 seconds. Once a valid Stop reaches the verified
 dispatch boundary, the operator timer gives way to the existing bounded App
-Server response and interrupted-lifecycle deadlines.
+Server response and interrupted-lifecycle deadlines. A stale or unknown control
+context rejects before it can claim the proof's one allowed action.
 
 ## Foreground Tailscale admission proof
 

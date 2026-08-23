@@ -618,7 +618,9 @@ durably claimed Stop reaches dispatch before context expiry, the operator timer
 is cleared; the existing 10-second App Server response deadline then applies,
 followed by a separate at-most-10-second interrupted-lifecycle deadline.
 Rejected, unauthorized, stale, replay-conflicting, malformed, or non-Stop
-traffic never receives that timer handoff.
+traffic never receives that timer handoff. The proof latches its one allowed
+Stop only after the active control context resolves and before durable claim, so
+an earlier stale or unknown-context request cannot poison the valid action.
 
 ## Direct APNs delivery boundary
 

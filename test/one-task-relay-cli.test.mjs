@@ -27,6 +27,9 @@ const repositoryRoot = fileURLToPath(new URL("../", import.meta.url));
 const EXTERNAL_STOP_CAPABILITY = "example.test/cap/external-stop";
 const EXTERNAL_STOP_APP_TOKEN = Buffer.alloc(32, 0x61).toString("base64url");
 const EXTERNAL_STOP_HMAC_KEY = Buffer.alloc(32, 0x62).toString("base64url");
+const EXTERNAL_STOP_UNKNOWN_CONTEXT_ID = Buffer.alloc(32, 0x63).toString(
+  "base64url",
+);
 const EXTERNAL_STOP_CONTEXT_PREFIX = "control context: ";
 
 async function relayStateHomes() {
@@ -1680,6 +1683,84 @@ test("CLI external Stop mode fails on a second authenticated action", async () =
         );
         assert.equal(result.stderr.includes("SENSITIVE"), false);
         assert.equal(result.stdout.includes("SENSITIVE"), false);
+        const methods = (await readFakeLog(logPath))
+          .filter((entry) => entry.kind === "method")
+          .map((entry) => entry.value);
+        assert.equal(
+          methods.filter((method) => method === "turn/interrupt").length,
+          1,
+        );
+        assert.equal((await readdir(fixture.replayRoot)).length, 1);
+        await assertPortClosed(port);
+      } finally {
+        if (relay.exitCode === null && relay.signalCode === null) {
+          relay.kill("SIGKILL");
+        }
+      }
+    });
+  } finally {
+    await rm(fixture.root, { recursive: true, force: true });
+  }
+  assert.deepEqual(await relayStateHomes(), stateBefore);
+});
+
+test("CLI external Stop mode does not latch an unknown context before the valid Stop", async () => {
+  const stateBefore = await relayStateHomes();
+  const fixture = await createExternalStopFixture();
+  try {
+    await withFakeCodex(async (fakeBinaryDirectory) => {
+      const port = await unusedPort();
+      const expectedAuthority = `relay-proof.test:${port}`;
+      const logPath = join(fakeBinaryDirectory, "fake-codex.jsonl");
+      const relay = spawn(
+        process.execPath,
+        externalStopArguments(fixture, port, expectedAuthority),
+        {
+          env: {
+            ...process.env,
+            FAKE_CODEX_LOG_PATH: logPath,
+            FAKE_CODEX_MODE: "external-stop-proof",
+            PATH: `${fakeBinaryDirectory}${delimiter}${process.env.PATH}`,
+          },
+          stdio: ["pipe", "pipe", "pipe"],
+        },
+      );
+      const completed = collectChild(relay);
+      const contextOutput = waitForOutput(
+        relay.stderr,
+        /control context: \{[^\n]+\}\n/u,
+      );
+      relay.stdin.end("SENSITIVE_EXTERNAL_UNKNOWN_CONTEXT_INPUT");
+      try {
+        const context = parseExternalStopContext(await contextOutput);
+        const unknownResponse = await sendExternalAction({
+          port,
+          expectedAuthority,
+          action: {
+            ...externalStopAction(context, "ios-unknown-context-stop-1"),
+            controlContextId: EXTERNAL_STOP_UNKNOWN_CONTEXT_ID,
+          },
+        });
+        assert.equal(unknownResponse.statusCode, 409);
+        assert.equal(
+          JSON.parse(unknownResponse.body).reason,
+          "unknownControlContext",
+        );
+
+        const acceptedResponse = await sendExternalAction({
+          port,
+          expectedAuthority,
+          action: externalStopAction(context, "ios-valid-context-stop-1"),
+        });
+        assert.equal(acceptedResponse.statusCode, 200);
+
+        const result = await waitWithin(
+          completed,
+          5_000,
+          "external Stop relay did not accept the valid action after an unknown context",
+        );
+        assert.equal(result.code, 0, result.stderr);
+        assertExternalStopOutputRedacted(result, fixture);
         const methods = (await readFakeLog(logPath))
           .filter((entry) => entry.kind === "method")
           .map((entry) => entry.value);

@@ -412,6 +412,7 @@ export function createTailscaleTurnActionRequestHandler({
   expectedCapability,
   authorizeAppToken,
   admitAction,
+  admitResolvedAction,
   resolveControlContext,
   replayStore,
   fingerprintAction,
@@ -427,6 +428,12 @@ export function createTailscaleTurnActionRequestHandler({
   }
   if (admitAction !== undefined && typeof admitAction !== "function") {
     throw new TypeError("admitAction must be a function");
+  }
+  if (
+    admitResolvedAction !== undefined &&
+    typeof admitResolvedAction !== "function"
+  ) {
+    throw new TypeError("admitResolvedAction must be a function");
   }
   if (typeof resolveControlContext !== "function") {
     throw new TypeError("resolveControlContext must be a function");
@@ -594,6 +601,16 @@ export function createTailscaleTurnActionRequestHandler({
     }
     if (context === null) {
       return response(409, rejected("unknownControlContext", action));
+    }
+
+    if (admitResolvedAction !== undefined) {
+      let admitted = false;
+      try {
+        admitted = admitResolvedAction(action) === true;
+      } catch {}
+      if (!admitted) {
+        return response(400, rejected("invalidRequest", action));
+      }
     }
 
     let claim;
