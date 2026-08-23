@@ -230,6 +230,64 @@ final class RemoteStopClientTests: XCTestCase {
         XCTAssertEqual(requestCount, 1)
     }
 
+    func testConcurrentStopsClaimOneTransportAttemptPerContext() async throws {
+        let transport = SuspendingFirstRemoteStopTransport(
+            response: RemoteStopHTTPResponse(
+                statusCode: 200,
+                body: acceptedReceipt(actionID: "ios_action_1")
+            )
+        )
+        let actionIDs = ActionIDSequence([
+            "ios_action_1",
+            "ios_action_2",
+            "ios_action_3"
+        ])
+        let client = RemoteStopClient(
+            loadPairing: { self.pairing() },
+            transport: transport,
+            now: { self.date("2030-01-02T03:04:05.000Z") },
+            makeActionID: { actionIDs.next() }
+        )
+        let expiresAt = date("2030-01-02T03:05:05.000Z")
+
+        let first = Task {
+            await client.stop(
+                controlContextID: contextID,
+                contextExpiresAt: expiresAt
+            )
+        }
+        defer {
+            first.cancel()
+            transport.releaseFirstRequest()
+        }
+        let firstRequestStarted = await transport.waitUntilFirstRequestStarts(
+            timeout: .seconds(2)
+        )
+        guard firstRequestStarted else {
+            XCTFail("The first Stop never reached the transport")
+            return
+        }
+
+        let overlapping = await client.stop(
+            controlContextID: contextID,
+            contextExpiresAt: expiresAt
+        )
+        XCTAssertEqual(overlapping, .notAttempted)
+        XCTAssertEqual(transport.requestCount(), 1)
+
+        transport.releaseFirstRequest()
+        let firstOutcome = await first.value
+        XCTAssertEqual(firstOutcome, .accepted)
+
+        let later = await client.stop(
+            controlContextID: contextID,
+            contextExpiresAt: expiresAt
+        )
+        XCTAssertEqual(later, .notAttempted)
+        XCTAssertEqual(transport.requestCount(), 1)
+        XCTAssertEqual(actionIDs.issuedCount, 3)
+    }
+
     private func pairing() -> PairingCredential {
         PairingCredential(
             origin: URL(string: "https://relay.example.ts.net")!,
@@ -278,6 +336,75 @@ private actor RecordingRemoteStopTransport: RemoteStopTransport {
 
     func requestCount() -> Int {
         requests.count
+    }
+}
+
+private final class SuspendingFirstRemoteStopTransport: RemoteStopTransport, @unchecked Sendable {
+    private let response: RemoteStopHTTPResponse
+    private let lock = NSLock()
+    private var requests: [URLRequest] = []
+    private var isFirstRequestReleased = false
+
+    init(response: RemoteStopHTTPResponse) {
+        self.response = response
+    }
+
+    func send(_ request: URLRequest) async throws -> RemoteStopHTTPResponse {
+        let isFirst = lock.withLock {
+            requests.append(request)
+            return requests.count == 1
+        }
+        if isFirst {
+            while !firstRequestWasReleased(), !Task.isCancelled {
+                try? await Task.sleep(for: .milliseconds(10))
+            }
+        }
+        return response
+    }
+
+    func waitUntilFirstRequestStarts(
+        timeout: Duration
+    ) async -> Bool {
+        let deadline = ContinuousClock.now.advanced(by: timeout)
+        while requestCount() == 0, ContinuousClock.now < deadline {
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        return requestCount() == 1
+    }
+
+    func releaseFirstRequest() {
+        lock.withLock {
+            isFirstRequestReleased = true
+        }
+    }
+
+    func requestCount() -> Int {
+        lock.withLock { requests.count }
+    }
+
+    private func firstRequestWasReleased() -> Bool {
+        lock.withLock { isFirstRequestReleased }
+    }
+}
+
+private final class ActionIDSequence: @unchecked Sendable {
+    private let lock = NSLock()
+    private var actionIDs: [String]
+    private var issuedCountValue = 0
+
+    init(_ actionIDs: [String]) {
+        self.actionIDs = actionIDs
+    }
+
+    var issuedCount: Int {
+        lock.withLock { issuedCountValue }
+    }
+
+    func next() -> String {
+        lock.withLock {
+            issuedCountValue += 1
+            return actionIDs.removeFirst()
+        }
     }
 }
 

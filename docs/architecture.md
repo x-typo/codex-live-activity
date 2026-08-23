@@ -502,6 +502,9 @@ of 60 seconds after issue and the public context expiry. The ephemeral URL
 session disables caches and cookies, rejects redirects, uses bounded timeouts,
 and reads at most 4 KiB of response data. It accepts only HTTP `200` with the
 exact correlated five-field `accepted` receipt and performs no automatic retry.
+The process-local live client holds a one-shot latch for each public control
+context, so overlapping intent executions can generate at most one transport
+request.
 
 Receipt acceptance proves only that the Mac accepted `turn/interrupt`; it does
 not prove the turn ended. The intent therefore changes the generic presentation

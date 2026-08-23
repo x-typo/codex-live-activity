@@ -85,11 +85,23 @@ final class RejectRedirectsDelegate: NSObject, URLSessionTaskDelegate, @unchecke
     }
 }
 
+private actor RemoteStopAttemptGate {
+    private var claimedContexts: [String: Date] = [:]
+
+    func claim(controlContextID: String, expiresAt: Date, now: Date) -> Bool {
+        claimedContexts = claimedContexts.filter { $0.value > now }
+        guard claimedContexts[controlContextID] == nil else { return false }
+        claimedContexts[controlContextID] = expiresAt
+        return true
+    }
+}
+
 struct RemoteStopClient: Sendable {
     private let loadPairing: @Sendable () async throws -> PairingCredential
     private let transport: any RemoteStopTransport
     private let now: @Sendable () -> Date
     private let makeActionID: @Sendable () -> String
+    private let attemptGate: RemoteStopAttemptGate
 
     init(
         loadPairing: @escaping @Sendable () async throws -> PairingCredential,
@@ -103,6 +115,7 @@ struct RemoteStopClient: Sendable {
         self.transport = transport
         self.now = now
         self.makeActionID = makeActionID
+        attemptGate = RemoteStopAttemptGate()
     }
 
     static let live = RemoteStopClient(
@@ -113,6 +126,7 @@ struct RemoteStopClient: Sendable {
     func stop(controlContextID: String, contextExpiresAt: Date) async -> RemoteStopAttemptOutcome {
         let context: ControlContext
         let action: StopActionRequest
+        let issuedAt = now()
         do {
             context = try RemoteControlContract.controlContext(
                 controlContextID: controlContextID,
@@ -121,7 +135,7 @@ struct RemoteStopClient: Sendable {
             action = try RemoteControlContract.makeStopAction(
                 actionID: makeActionID(),
                 context: context,
-                now: now()
+                now: issuedAt
             )
         } catch {
             return .notAttempted
@@ -146,6 +160,13 @@ struct RemoteStopClient: Sendable {
         request.httpMethod = "POST"
         request.httpBody = try? action.encodedJSON()
         guard request.httpBody != nil else {
+            return .notAttempted
+        }
+        guard await attemptGate.claim(
+            controlContextID: context.controlContextID,
+            expiresAt: context.expiresAt,
+            now: issuedAt
+        ) else {
             return .notAttempted
         }
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
