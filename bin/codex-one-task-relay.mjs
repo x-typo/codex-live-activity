@@ -553,6 +553,26 @@ function runOwnedTask({
       actionProofActivationTimer = null;
     }
 
+    function armActionProofActivationTimer() {
+      if (
+        actionProof === null ||
+        actionProofStarted ||
+        actionProofActivationTimer !== null
+      ) {
+        return;
+      }
+      actionProofActivationTimer = setTimeout(
+        () =>
+          fail(
+            new SafeRelayError(
+              "loopback action proof did not observe a matching turn start",
+            ),
+          ),
+        LOOPBACK_PROOF_ACTIVATION_TIMEOUT_MS,
+      );
+      actionProofActivationTimer.unref();
+    }
+
     function revokeActiveTurn() {
       try {
         if (claimedThreadId !== null && expectedTurnId !== null) {
@@ -780,22 +800,7 @@ function runOwnedTask({
         acceptTerminal(terminal);
         return;
       }
-      if (
-        actionProof !== null &&
-        observedTurnId === null &&
-        actionProofActivationTimer === null
-      ) {
-        actionProofActivationTimer = setTimeout(
-          () =>
-            fail(
-              new SafeRelayError(
-                "loopback action proof did not observe a matching turn start",
-              ),
-            ),
-          LOOPBACK_PROOF_ACTIVATION_TIMEOUT_MS,
-        );
-        actionProofActivationTimer.unref();
-      }
+      armActionProofActivationTimer();
       beginActionProof();
     }
 
@@ -848,6 +853,7 @@ function runOwnedTask({
         verifyMcpIsolationStatus(message.result, configuredMcpNames);
         configuredMcpNames.clear();
         phase = "starting-turn";
+        armActionProofActivationTimer();
         send(child, {
           method: "turn/start",
           id: 3,

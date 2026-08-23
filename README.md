@@ -63,9 +63,10 @@ That mode creates synthetic 32-byte token and HMAC files plus a replay root in
 one owner-private disposable directory outside the repository, starts the
 existing listener on an ephemeral `127.0.0.1` port, and issues one control
 context only after the `turn/start` response and matching `turn/started`
-notification agree. A bounded activation deadline fails closed if that
-corroboration never arrives. An internal proof client then sends one Reply and
-one Stop through the complete listener, ingress, replay, context,
+notification agree. A bounded activation deadline begins when `turn/start` is
+sent and fails closed unless both halves of that correlation arrive. An
+internal proof client then sends one Reply and one Stop through the complete
+listener, ingress, replay, context,
 action-boundary, and App Server stdio path. Success requires accepted
 `turn/steer` and `turn/interrupt` responses plus a matching
 `turn/completed: interrupted`

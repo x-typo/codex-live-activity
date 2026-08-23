@@ -212,12 +212,14 @@ function runFakeAppServer() {
       });
     }
 
-    send({
-      id: message.id,
-      result: {
-        turn: { id: "turn-fake", status: "inProgress", items: [] },
-      },
-    });
+    if (mode !== "loopback-action-proof-missing-start-response") {
+      send({
+        id: message.id,
+        result: {
+          turn: { id: "turn-fake", status: "inProgress", items: [] },
+        },
+      });
+    }
     send({
       method: "thread/status/changed",
       params: {

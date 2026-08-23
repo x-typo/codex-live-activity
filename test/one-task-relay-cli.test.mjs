@@ -288,35 +288,42 @@ test("CLI fails closed on a mismatched live steer response and cleans proof stat
   assert.deepEqual(await loopbackProofHomes(), proofBefore);
 });
 
-test("CLI bounds missing turn-start corroboration and cleans proof state", async () => {
-  const stateBefore = await relayStateHomes();
-  const proofBefore = await loopbackProofHomes();
-  const result = await withFakeCodex((fakeBinaryDirectory) =>
-    spawnSync(
-      process.execPath,
-      [relayPath, "--cwd", repositoryRoot, "--loopback-action-proof"],
-      {
-        input: "SENSITIVE_MISSING_TURN_START_INPUT",
-        encoding: "utf8",
-        timeout: 10_000,
-        env: {
-          ...process.env,
-          FAKE_CODEX_MODE: "loopback-action-proof-missing-start",
-          PATH: `${fakeBinaryDirectory}${delimiter}${process.env.PATH}`,
-        },
-      },
-    ),
-  );
+test("CLI bounds incomplete turn-start correlation and cleans proof state", async (t) => {
+  for (const [name, mode] of [
+    ["missing turn/start response", "loopback-action-proof-missing-start-response"],
+    ["missing turn/started notification", "loopback-action-proof-missing-start"],
+  ]) {
+    await t.test(name, async () => {
+      const stateBefore = await relayStateHomes();
+      const proofBefore = await loopbackProofHomes();
+      const result = await withFakeCodex((fakeBinaryDirectory) =>
+        spawnSync(
+          process.execPath,
+          [relayPath, "--cwd", repositoryRoot, "--loopback-action-proof"],
+          {
+            input: "SENSITIVE_INCOMPLETE_TURN_START_INPUT",
+            encoding: "utf8",
+            timeout: 10_000,
+            env: {
+              ...process.env,
+              FAKE_CODEX_MODE: mode,
+              PATH: `${fakeBinaryDirectory}${delimiter}${process.env.PATH}`,
+            },
+          },
+        ),
+      );
 
-  assert.equal(result.status, 1, result.error?.message);
-  assert.match(
-    result.stderr,
-    /loopback action proof did not observe a matching turn start/,
-  );
-  assert.equal(result.stderr.includes("SENSITIVE"), false);
-  assert.equal(result.stdout.includes("SENSITIVE"), false);
-  assert.deepEqual(await relayStateHomes(), stateBefore);
-  assert.deepEqual(await loopbackProofHomes(), proofBefore);
+      assert.equal(result.status, 1, result.error?.message);
+      assert.match(
+        result.stderr,
+        /loopback action proof did not observe a matching turn start/,
+      );
+      assert.equal(result.stderr.includes("SENSITIVE"), false);
+      assert.equal(result.stdout.includes("SENSITIVE"), false);
+      assert.deepEqual(await relayStateHomes(), stateBefore);
+      assert.deepEqual(await loopbackProofHomes(), proofBefore);
+    });
+  }
 });
 
 test("CLI completes proof cleanup when its status output closes", async () => {
