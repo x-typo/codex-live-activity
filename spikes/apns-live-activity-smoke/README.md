@@ -1,17 +1,61 @@
-# APNs Live Activity smoke
+# APNs Live Activity and iPhone Stop-control smoke
 
-This isolated spike proves one boundary only: an ActivityKit push sent through
-Apple Push Notification service updates a Live Activity while the physical
-iPhone is locked and the smoke app remains unopened.
+This isolated spike contains two separately gated boundaries:
 
-It does not connect to Codex, create a Mac relay, store APNs credentials, pair
-devices, or implement the accepted production design.
+- the completed physical proof that an ActivityKit push sent through Apple Push
+  Notification service updates a Live Activity while the iPhone is locked and
+  the smoke app remains unopened; and
+- an iPhone pairing and authenticated Stop prototype, validated with synthetic
+  fixtures, an iOS Simulator, and one separately approved locked-phone physical
+  proof.
+
+It does not itself create a Mac relay or store APNs credentials. The new Stop
+prototype is a client for the repository's existing one-task relay boundary; no
+real pairing credential, live Serve target, relay task, or phone action is part
+of the repository-only proof.
 
 ## Privacy boundary
 
 Every payload contains only synthetic state and the fixed marker
 `CLA-APNS-SMOKE-20260812-A`. Do not paste Codex prompts, transcripts, commands,
 tool payloads, or other private content into Apple’s Push Notifications Console.
+
+The pairing prototype accepts two exact QR shapes. The private pairing QR holds
+only the tailnet HTTPS origin and one 32-byte app token and is stored in the
+app-private Keychain with `kSecAttrAccessibleWhenUnlockedThisDeviceOnly`. The
+separate public control QR holds only one opaque context ID and expiry. Never
+place the private pairing QR in screenshots, arguments, files, logs, APNs, or
+ActivityKit state.
+
+## Stop-control prototype
+
+The app's **Scan pairing or control QR** flow accepts either the private pairing
+QR or the public control-context QR. A valid public context starts one synthetic
+Live Activity and enables Stop on the Lock Screen and expanded Dynamic Island.
+The Stop intent explicitly requires local-device authentication, sends one exact
+request through the paired tailnet HTTPS origin, accepts only a correlated
+success receipt, and never retries an uncertain result. The control activity is
+local-only and has no ActivityKit push token in this phase. After the matching
+Mac lifecycle proves the task stopped, reopen the app and use **End Locally**;
+terminal APNs presentation remains a later integration. A physical proof may
+keep the public context available for up to 120 seconds, but the Stop request
+itself remains limited to 60 seconds or the remaining context lifetime,
+whichever is shorter.
+
+The Mac presenter reads a bounded payload only from a noninteractive standard
+input stream. It refuses a terminal because typed input would normally echo into
+terminal output and scrollback. A later owner-private generator must pipe the
+payload directly; do not pass it in arguments, paste it from the clipboard, or
+type it interactively. Use it with a real credential only inside a separately
+approved bounded proof after owner-private server state already exists. The
+current deterministic tests use synthetic values only.
+
+The completed physical Stop proof imported the private pairing and one public
+context, required local authentication on the locked iPhone, accepted one exact
+Stop on the Mac, and observed the matching terminal `interrupted` lifecycle. It
+used no APNs request or token. Temporary Serve/grant state was restored after the
+proof; the paired credential and one content-free replay receipt remain in their
+owner-private stores and are not part of this repository.
 
 ## Prerequisites
 

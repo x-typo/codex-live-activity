@@ -6,7 +6,10 @@ import UIKit
 final class SmokeActivityModel: ObservableObject {
     @Published private(set) var activityID: String?
     @Published private(set) var pushToken: String?
+    @Published private(set) var expectsPushToken = false
     @Published private(set) var errorMessage: String?
+    @Published private(set) var pairingStatus = "Not paired"
+    @Published private(set) var importMessage: String?
 
     private var activity: Activity<SmokeActivityAttributes>?
     private var tokenTask: Task<Void, Never>?
@@ -39,12 +42,53 @@ final class SmokeActivityModel: ObservableObject {
             self.activity = activity
             activityID = activity.id
             pushToken = nil
+            expectsPushToken = true
             errorMessage = nil
             observePushToken(for: activity)
             observeState(for: activity)
         } catch {
             errorMessage = error.localizedDescription
         }
+    }
+
+    func refreshPairingStatus() async {
+        do {
+            _ = try await RemoteControlPairingStore().load()
+            pairingStatus = "Paired"
+        } catch RemoteControlPairingStoreError.notPaired {
+            pairingStatus = "Not paired"
+        } catch {
+            pairingStatus = "Pairing unavailable"
+        }
+    }
+
+    func importScannedPayload(_ payload: String) async {
+        let data = Data(payload.utf8)
+        if (try? RemoteControlContract.decodePairingCredential(from: data)) != nil {
+            do {
+                _ = try await RemoteControlPairingStore().save(pairingPayload: data)
+                pairingStatus = "Paired"
+                importMessage = "Pairing stored securely"
+                errorMessage = nil
+            } catch {
+                await refreshPairingStatus()
+                importMessage = nil
+                if error as? RemoteControlPairingStoreError == .writeOutcomeUnknown {
+                    errorMessage = "Pairing status is uncertain. Do not use Stop until it is repaired."
+                } else {
+                    errorMessage = "Pairing could not be stored."
+                }
+            }
+            return
+        }
+
+        if let context = try? RemoteControlContract.decodeControlContext(from: data) {
+            startControlActivity(context)
+            return
+        }
+
+        importMessage = nil
+        errorMessage = "That QR code is not a supported pairing or control context."
     }
 
     func copyPushToken() {
@@ -69,9 +113,64 @@ final class SmokeActivityModel: ObservableObject {
     }
 
     func reconcileActivityState() {
+        if activity == nil,
+           let existing = Activity<SmokeActivityAttributes>.activities.first(where: {
+               $0.activityState != .ended && $0.activityState != .dismissed
+           }) {
+            activity = existing
+            activityID = existing.id
+            expectsPushToken =
+                existing.content.state.marker == "CLA-APNS-SMOKE-20260812-A"
+            if expectsPushToken {
+                observePushToken(for: existing)
+            }
+            observeState(for: existing)
+        }
         guard let activity else { return }
         if activity.activityState == .ended || activity.activityState == .dismissed {
             clearActivity(matching: activity.id)
+        }
+    }
+
+    private func startControlActivity(_ context: ControlContext) {
+        guard activity == nil else {
+            importMessage = nil
+            errorMessage = "End the current Live Activity before importing a control context."
+            return
+        }
+        guard context.expiresAt > Date() else {
+            importMessage = nil
+            errorMessage = "That control context has expired."
+            return
+        }
+
+        let attributes = SmokeActivityAttributes(taskName: "Codex control smoke")
+        let state = SmokeActivityAttributes.ContentState(
+            status: "Working",
+            detail: "Ready for authenticated Stop",
+            attentionRequired: false,
+            marker: "CLA-IPHONE-STOP-SMOKE-20260823-A",
+            sequence: 0,
+            stopControl: SmokeActivityAttributes.StopControlContext(context)
+        )
+        let content = ActivityContent(state: state, staleDate: context.expiresAt)
+
+        do {
+            let activity = try Activity.request(
+                attributes: attributes,
+                content: content,
+                pushType: nil
+            )
+            self.activity = activity
+            activityID = activity.id
+            pushToken = nil
+            expectsPushToken = false
+            importMessage = "Control Live Activity started"
+            errorMessage = nil
+            observeState(for: activity)
+        } catch {
+            importMessage = nil
+            errorMessage = "The control Live Activity could not start."
         }
     }
 
@@ -107,12 +206,14 @@ final class SmokeActivityModel: ObservableObject {
         activity = nil
         activityID = nil
         pushToken = nil
+        expectsPushToken = false
     }
 }
 
 struct ContentView: View {
     @Environment(\.scenePhase) private var scenePhase
     @StateObject private var model = SmokeActivityModel()
+    @State private var showingScanner = false
 
     var body: some View {
         NavigationStack {
@@ -139,7 +240,7 @@ struct ContentView: View {
                         Button("Copy Push Token") {
                             model.copyPushToken()
                         }
-                    } else if model.activityID != nil {
+                    } else if model.activityID != nil && model.expectsPushToken {
                         ProgressView("Waiting for ActivityKit push token")
                     }
 
@@ -149,6 +250,23 @@ struct ContentView: View {
                                 await model.endLocally()
                             }
                         }
+                    }
+                }
+
+                Section("Authenticated Stop proof") {
+                    LabeledContent("Pairing", value: model.pairingStatus)
+
+                    Button("Scan pairing or control QR") {
+                        showingScanner = true
+                    }
+
+                    Text("Scan the private pairing code once, then scan a public short-lived control context for each proof task.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+
+                    if let importMessage = model.importMessage {
+                        Text(importMessage)
+                            .foregroundStyle(.green)
                     }
                 }
 
@@ -166,10 +284,31 @@ struct ContentView: View {
             .navigationTitle("APNs Smoke")
             .onAppear {
                 model.reconcileActivityState()
+                Task {
+                    await model.refreshPairingStatus()
+                }
             }
             .onChange(of: scenePhase) { _, phase in
                 if phase == .active {
                     model.reconcileActivityState()
+                }
+            }
+            .sheet(isPresented: $showingScanner) {
+                NavigationStack {
+                    QRScannerView { payload in
+                        showingScanner = false
+                        Task {
+                            await model.importScannedPayload(payload)
+                        }
+                    }
+                    .navigationTitle("Scan secure code")
+                    .toolbar {
+                        ToolbarItem(placement: .cancellationAction) {
+                            Button("Cancel") {
+                                showingScanner = false
+                            }
+                        }
+                    }
                 }
             }
         }
