@@ -143,6 +143,63 @@ function runFakeAppServer() {
       return;
     }
 
+    if (message.method === "turn/steer") {
+      if (!mode?.startsWith("loopback-action-proof")) return;
+      const valid =
+        typeof message.id === "string" &&
+        message.params?.threadId === "thread-fake" &&
+        message.params?.expectedTurnId === "turn-fake" &&
+        Array.isArray(message.params?.input) &&
+        message.params.input.length === 1 &&
+        message.params.input[0]?.type === "text" &&
+        typeof message.params.input[0]?.text === "string" &&
+        message.params.input[0].text.length > 0;
+      log({ kind: "action-validation", method: message.method, valid });
+      if (!valid) {
+        send({ id: message.id, error: { message: "SENSITIVE_INVALID_STEER" } });
+        return;
+      }
+      send({
+        id: message.id,
+        result: {
+          turnId:
+            mode === "loopback-action-proof-wrong-steer"
+              ? "turn-wrong"
+              : "turn-fake",
+        },
+      });
+      return;
+    }
+
+    if (message.method === "turn/interrupt") {
+      if (!mode?.startsWith("loopback-action-proof")) return;
+      const valid =
+        typeof message.id === "string" &&
+        message.params?.threadId === "thread-fake" &&
+        message.params?.turnId === "turn-fake";
+      log({ kind: "action-validation", method: message.method, valid });
+      if (!valid) {
+        send({ id: message.id, error: { message: "SENSITIVE_INVALID_STOP" } });
+        return;
+      }
+      const completeInterrupt = () => {
+        send({ id: message.id, result: {} });
+        send({
+          method: "turn/completed",
+          params: {
+            threadId: "thread-fake",
+            turn: { id: "turn-fake", status: "interrupted" },
+          },
+        });
+      };
+      if (mode === "loopback-action-proof-delayed-stop") {
+        setTimeout(completeInterrupt, 100);
+      } else {
+        completeInterrupt();
+      }
+      return;
+    }
+
     if (message.method !== "turn/start") return;
 
     if (mode === "early-mismatched-completion") {
@@ -168,17 +225,19 @@ function runFakeAppServer() {
         status: { type: "active", activeFlags: [] },
       },
     });
-    send({
-      method: "turn/started",
-      params: {
-        threadId: "thread-fake",
-        turn: {
-          id: "turn-fake",
-          status: "inProgress",
-          items: [{ type: "userMessage", content: "SENSITIVE_FAKE_PROMPT" }],
+    if (mode !== "loopback-action-proof-missing-start") {
+      send({
+        method: "turn/started",
+        params: {
+          threadId: "thread-fake",
+          turn: {
+            id: "turn-fake",
+            status: "inProgress",
+            items: [{ type: "userMessage", content: "SENSITIVE_FAKE_PROMPT" }],
+          },
         },
-      },
-    });
+      });
+    }
 
     if (mode === "thread-closed") {
       send({
@@ -237,7 +296,13 @@ function runFakeAppServer() {
       return;
     }
 
-    if (mode === "waiting" || mode === "stubborn-waiting") return;
+    if (
+      mode === "waiting" ||
+      mode === "stubborn-waiting" ||
+      mode?.startsWith("loopback-action-proof")
+    ) {
+      return;
+    }
 
     if (mode === "mismatched-completion") {
       send({

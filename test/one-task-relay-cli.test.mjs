@@ -27,6 +27,12 @@ async function relayStateHomes() {
     .sort();
 }
 
+async function loopbackProofHomes() {
+  return (await readdir(tmpdir()))
+    .filter((name) => name.startsWith("cla-local-action-proof."))
+    .sort();
+}
+
 async function withFakeCodex(run) {
   const fakeBinaryDirectory = await mkdtemp(join(tmpdir(), "cla-fake-codex."));
   const fakeBinary = join(fakeBinaryDirectory, "codex");
@@ -184,6 +190,179 @@ test("CLI owns one fake App Server task and emits only dry-run APNs JSONL", asyn
     assert.equal(encoded.includes(marker), false, marker);
   }
   assert.deepEqual(await relayStateHomes(), before);
+});
+
+test("CLI composes synthetic loopback Reply and Stop into one owned task", async () => {
+  const stateBefore = await relayStateHomes();
+  const proofBefore = await loopbackProofHomes();
+  const { log, result } = await withFakeCodex(async (fakeBinaryDirectory) => {
+    const logPath = join(fakeBinaryDirectory, "fake-codex.jsonl");
+    const result = spawnSync(
+      process.execPath,
+      [relayPath, "--cwd", repositoryRoot, "--loopback-action-proof"],
+      {
+        input: "SENSITIVE_LOOPBACK_TASK_INPUT",
+        encoding: "utf8",
+        timeout: 10_000,
+        env: {
+          ...process.env,
+          FAKE_CODEX_LOG_PATH: logPath,
+          FAKE_CODEX_MODE: "loopback-action-proof",
+          PATH: `${fakeBinaryDirectory}${delimiter}${process.env.PATH}`,
+        },
+      },
+    );
+    return { log: await readFakeLog(logPath), result };
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(
+    result.stderr,
+    [
+      "loopback proof: Reply accepted",
+      "loopback proof: Stop accepted",
+      "loopback proof: interrupted lifecycle confirmed",
+      "",
+    ].join("\n"),
+  );
+  const methods = log
+    .filter((entry) => entry.kind === "method")
+    .map((entry) => entry.value);
+  assert.equal(methods.filter((method) => method === "thread/start").length, 1);
+  assert.equal(methods.filter((method) => method === "turn/start").length, 1);
+  assert.deepEqual(methods.slice(-2), ["turn/steer", "turn/interrupt"]);
+  assert.deepEqual(
+    log
+      .filter((entry) => entry.kind === "action-validation")
+      .map((entry) => ({ method: entry.method, valid: entry.valid })),
+    [
+      { method: "turn/steer", valid: true },
+      { method: "turn/interrupt", valid: true },
+    ],
+  );
+  const payloads = result.stdout
+    .trim()
+    .split("\n")
+    .map((line) => JSON.parse(line));
+  assert.equal(payloads[0].aps["content-state"].status, "Working");
+  assert.equal(payloads.at(-1).aps["content-state"].status, "Blocked");
+  for (const marker of [
+    "SENSITIVE_LOOPBACK_TASK_INPUT",
+    "Continue the bounded local proof.",
+    "thread-fake",
+    "turn-fake",
+    "local-proof-reply-1",
+    "local-proof-stop-1",
+  ]) {
+    assert.equal(`${result.stdout}${result.stderr}`.includes(marker), false, marker);
+  }
+  assert.deepEqual(await relayStateHomes(), stateBefore);
+  assert.deepEqual(await loopbackProofHomes(), proofBefore);
+});
+
+test("CLI fails closed on a mismatched live steer response and cleans proof state", async () => {
+  const stateBefore = await relayStateHomes();
+  const proofBefore = await loopbackProofHomes();
+  const result = await withFakeCodex((fakeBinaryDirectory) =>
+    spawnSync(
+      process.execPath,
+      [relayPath, "--cwd", repositoryRoot, "--loopback-action-proof"],
+      {
+        input: "SENSITIVE_MISMATCHED_STEER_TASK_INPUT",
+        encoding: "utf8",
+        timeout: 10_000,
+        env: {
+          ...process.env,
+          FAKE_CODEX_MODE: "loopback-action-proof-wrong-steer",
+          PATH: `${fakeBinaryDirectory}${delimiter}${process.env.PATH}`,
+        },
+      },
+    ),
+  );
+
+  assert.equal(result.status, 1, result.error?.message);
+  assert.match(result.stderr, /loopback action proof was rejected/);
+  assert.equal(result.stderr.includes("SENSITIVE"), false);
+  assert.equal(result.stdout.includes("SENSITIVE"), false);
+  assert.deepEqual(await relayStateHomes(), stateBefore);
+  assert.deepEqual(await loopbackProofHomes(), proofBefore);
+});
+
+test("CLI bounds missing turn-start corroboration and cleans proof state", async () => {
+  const stateBefore = await relayStateHomes();
+  const proofBefore = await loopbackProofHomes();
+  const result = await withFakeCodex((fakeBinaryDirectory) =>
+    spawnSync(
+      process.execPath,
+      [relayPath, "--cwd", repositoryRoot, "--loopback-action-proof"],
+      {
+        input: "SENSITIVE_MISSING_TURN_START_INPUT",
+        encoding: "utf8",
+        timeout: 10_000,
+        env: {
+          ...process.env,
+          FAKE_CODEX_MODE: "loopback-action-proof-missing-start",
+          PATH: `${fakeBinaryDirectory}${delimiter}${process.env.PATH}`,
+        },
+      },
+    ),
+  );
+
+  assert.equal(result.status, 1, result.error?.message);
+  assert.match(
+    result.stderr,
+    /loopback action proof did not observe a matching turn start/,
+  );
+  assert.equal(result.stderr.includes("SENSITIVE"), false);
+  assert.equal(result.stdout.includes("SENSITIVE"), false);
+  assert.deepEqual(await relayStateHomes(), stateBefore);
+  assert.deepEqual(await loopbackProofHomes(), proofBefore);
+});
+
+test("CLI completes proof cleanup when its status output closes", async () => {
+  const stateBefore = await relayStateHomes();
+  const proofBefore = await loopbackProofHomes();
+  await withFakeCodex(async (fakeBinaryDirectory) => {
+    const relay = spawn(
+      process.execPath,
+      [relayPath, "--cwd", repositoryRoot, "--loopback-action-proof"],
+      {
+        env: {
+          ...process.env,
+          FAKE_CODEX_MODE: "loopback-action-proof-delayed-stop",
+          PATH: `${fakeBinaryDirectory}${delimiter}${process.env.PATH}`,
+        },
+        stdio: ["pipe", "pipe", "pipe"],
+      },
+    );
+    const completed = collectChild(relay);
+    const replyAccepted = waitForOutput(
+      relay.stderr,
+      /loopback proof: Reply accepted/,
+    );
+    relay.stdin.end("SENSITIVE_CLOSED_STATUS_TASK_INPUT");
+    try {
+      await replyAccepted;
+      relay.stderr.destroy();
+      const result = await waitWithin(
+        completed,
+        5_000,
+        "relay did not exit after its status output closed",
+      );
+      assert.equal(result.code, 0);
+      assert.equal(result.signal, null);
+      assert.equal(result.stdout.includes("SENSITIVE"), false);
+      const payloads = result.stdout
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line));
+      assert.equal(payloads.at(-1).aps["content-state"].status, "Blocked");
+    } finally {
+      if (relay.exitCode === null && relay.signalCode === null) relay.kill("SIGKILL");
+    }
+  });
+  assert.deepEqual(await relayStateHomes(), stateBefore);
+  assert.deepEqual(await loopbackProofHomes(), proofBefore);
 });
 
 test("CLI fails closed on an MCP identifier that is not a bare config key", async () => {

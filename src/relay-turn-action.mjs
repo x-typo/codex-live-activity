@@ -18,6 +18,13 @@ const REASONS = new Set([
   "wrongThread",
 ]);
 
+export class RelayTurnActionOutcomeUnknownError extends Error {
+  constructor() {
+    super("relay turn action outcome is unknown");
+    this.name = "RelayTurnActionOutcomeUnknownError";
+  }
+}
+
 function isObject(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
@@ -165,17 +172,20 @@ function requestFor(action) {
   };
 }
 
-function acceptsResponse(response, request) {
-  if (
-    !isObject(response) ||
-    response.id !== request.id ||
-    Object.hasOwn(response, "error") ||
-    !isObject(response.result)
-  ) {
-    return false;
+function classifyResponse(response, request) {
+  if (!isObject(response) || response.id !== request.id) return "unknown";
+  const hasError = Object.hasOwn(response, "error");
+  const hasResult = Object.hasOwn(response, "result");
+  if (hasError) {
+    return !hasResult && isObject(response.error) ? "rejected" : "unknown";
   }
-  if (request.method === "turn/interrupt") return true;
-  return response.result.turnId === request.params.expectedTurnId;
+  if (!hasResult || !isObject(response.result)) return "unknown";
+  if (request.method === "turn/interrupt") {
+    return Object.keys(response.result).length === 0 ? "accepted" : "unknown";
+  }
+  return response.result.turnId === request.params.expectedTurnId
+    ? "accepted"
+    : "unknown";
 }
 
 export class MockOneTaskTurnActionBoundary {
@@ -238,9 +248,13 @@ export class MockOneTaskTurnActionBoundary {
     const request = requestFor(action);
     try {
       const response = await this.sendRequest(request);
-      if (!acceptsResponse(response, request)) {
+      const responseClassification = classifyResponse(response, request);
+      if (responseClassification === "rejected") {
         if (action.action === "stop") this.clearStopPending();
         return rejected(action, "appServerRejected");
+      }
+      if (responseClassification === "unknown") {
+        throw new RelayTurnActionOutcomeUnknownError();
       }
       return receipt({
         actionId: action.actionId,
@@ -248,9 +262,9 @@ export class MockOneTaskTurnActionBoundary {
         outcome: "accepted",
         appServerMethod: request.method,
       });
-    } catch {
-      if (action.action === "stop") this.clearStopPending();
-      return rejected(action, "appServerRejected");
+    } catch (error) {
+      if (error instanceof RelayTurnActionOutcomeUnknownError) throw error;
+      throw new RelayTurnActionOutcomeUnknownError();
     } finally {
       this.inFlight = false;
     }

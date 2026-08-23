@@ -223,14 +223,14 @@ state: `stale` can still describe an in-flight turn. The active correlation must
 be cleared on its matching terminal event, owned-thread close, or stream loss,
 and that same lifecycle handling must clear the boolean Stop-pending latch.
 
-This phase supplies only an injected mock request function and deterministic
-tests. It does not wire an inbound listener into the relay executable, change
-the one-way APNs pipeline, add an iPhone control, select a network transport, or
-answer an approval or structured user-input request. Reply text can therefore
-exist transiently only in the outbound App Server request used by a future
-adapter. If wired to the existing owned process, it may also enter that process's
-deletion-verified disposable SQLite state; it must not enter relay receipts,
-logs, APNs payloads, retained action state, or durable action storage.
+The injected action boundary remains independently testable. The relay's
+explicit `--loopback-action-proof` mode now connects it to the selected ingress,
+listener, and one disposable owned App Server process without changing the
+one-way APNs pipeline or adding an iPhone control. It still cannot answer an
+approval or structured user-input request. Reply text exists transiently in the
+outbound App Server request and may enter only that process's deletion-verified
+disposable SQLite state; it must not enter relay receipts, logs, APNs payloads,
+retained action state, or durable action storage.
 
 The bounded recent-ID set is not a security claim. Authentication, expiry,
 durable replay defense, task-scoped capabilities, and unavailable behavior
@@ -394,7 +394,7 @@ the foreground composer unless encrypted draft retention is separately chosen.
 The current implementation supplies the strict JSON adapter boundary, one-task
 context registry, owner-private secret loader/verifier, durable file replay
 store, and `src/localhost-turn-action-listener.mjs`. The listener factory is
-closed by default and has no executable entry point. Its explicit one-shot
+closed by default and has no standalone executable entry point. Its explicit one-shot
 `start()` accepts only a validated port and hard-codes literal `127.0.0.1`; it
 does not accept a host, DNS name, wildcard, IPv6, LAN, or Tailscale address. The
 bound address is checked after startup, and a failed fixed-port bind never
@@ -416,15 +416,24 @@ grace period before forcing their sockets closed. A claimed action is never
 deleted during shutdown: an interrupted durable outcome remains an uncertain
 tombstone and cannot become dispatchable after restart.
 
-The integration proof composes all five pieces with synthetic temporary state,
-uses a real ephemeral loopback socket, verifies an authorized Reply and durable
-retry, verifies unauthorized rejection, then closes the listener and removes
-the temporary state. It intentionally supplies no real token generation or
-phone pairing, Keychain adapter, Tailscale configuration, Swift UI, App Intent,
-relay/App Server executable wiring, or persistent service. The later Serve phase
-must observe the actual forwarded `Host` before selecting its exact configured
-authority. Replay records are retained indefinitely in this phase; no automatic
-pruning may erase a tombstone and make an old action dispatchable again.
+The base integration proof composes all five ingress pieces with synthetic
+temporary state, uses a real ephemeral loopback socket, verifies an authorized
+Reply and durable retry plus unauthorized rejection, then closes the listener
+and removes the temporary state. `src/mac-local-turn-action-composition.mjs`
+adds the executable seam: it loads the same secret and replay boundaries, starts
+the same listener, and issues one context only for a corroborated active turn.
+The relay's opt-in proof mode supplies synthetic owner-private files, self-drives
+one Reply and one Stop over that socket, and requires both App Server acceptance
+and the matching interrupted lifecycle before cleanup.
+
+The synthetic capability header used by this local proof is forgeable by other
+local processes and is not evidence of Tailscale admission. The proof supplies
+no real token generation or phone pairing, Keychain adapter, Tailscale
+configuration, Swift UI, App Intent, or persistent service. The later Serve
+phase must observe the actual forwarded `Host` before selecting its exact
+configured authority. Durable replay records are retained indefinitely by the
+production boundary; only the proof's entire disposable root is deleted after
+the listener closes.
 
 An App Intent's authentication policy defaults to `alwaysAllowed`, including
 when the device is locked. The future Stop `LiveActivityIntent` must therefore
@@ -484,6 +493,25 @@ bodies are drained without being forwarded or persisted. `SIGINT` and `SIGTERM`
 initiate the same child-stop and verified temporary-state cleanup path before the
 relay exits with the conventional signal status. A broken dry-run stdout also
 stops the child and runs the same cleanup path.
+
+In `--loopback-action-proof` mode, the listener and synthetic secret/replay root
+are ready before task input is sent. The executable creates the private action
+boundary only after the `turn/start` response and matching `turn/started`
+notification corroborate the exact owned turn. A bounded response multiplexer
+accepts only the pending safe string action ID in addition to startup request
+IDs `0` through `3`; unknown, duplicate, or late responses remain protocol
+failures. An explicit correlated App Server JSON-RPC error becomes the
+content-free `appServerRejected` receipt. A missing, malformed, or mismatched
+success response, or loss of the stdio response after a request may have been
+written, propagates as `outcomeUnknown`, retains Stop's pending latch, and is
+never redispatched.
+
+Matching terminal, owned-thread close, stream loss, signal, or output failure
+revokes the control context and clears the action gate before the listener and
+child are closed. A successful Stop smoke additionally requires
+`turn/completed: interrupted`; its accepted HTTP receipt alone is not proof of
+effect. The interrupted lifecycle continues to map to the existing generic
+`Blocked` status because this phase does not add a new presentation state.
 
 ## Direct APNs delivery boundary
 
