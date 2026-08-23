@@ -14,6 +14,19 @@
 		B10000000000000000000005 /* SmokeLiveActivity.swift in Sources */ = {isa = PBXBuildFile; fileRef = C10000000000000000000005 /* SmokeLiveActivity.swift */; };
 		B10000000000000000000006 /* SmokeActivityAttributes.swift in Sources */ = {isa = PBXBuildFile; fileRef = C10000000000000000000003 /* SmokeActivityAttributes.swift */; };
 		B10000000000000000000007 /* CodexLiveActivitySmokeWidget.appex in Embed App Extensions */ = {isa = PBXBuildFile; fileRef = C1000000000000000000000A /* CodexLiveActivitySmokeWidget.appex */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
+		B10000000000000000000008 /* RemoteControlContract.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1000000000000000000000B /* RemoteControlContract.swift */; };
+		B10000000000000000000009 /* RemoteControlContract.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1000000000000000000000B /* RemoteControlContract.swift */; };
+		B1000000000000000000000A /* StopLiveActivityIntent.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1000000000000000000000C /* StopLiveActivityIntent.swift */; };
+		B1000000000000000000000B /* StopLiveActivityIntent.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1000000000000000000000C /* StopLiveActivityIntent.swift */; };
+		B1000000000000000000000C /* RemoteControlPairingStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1000000000000000000000D /* RemoteControlPairingStore.swift */; };
+		B1000000000000000000000D /* RemoteControlPairingStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1000000000000000000000D /* RemoteControlPairingStore.swift */; };
+		B1000000000000000000000E /* RemoteStopClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1000000000000000000000E /* RemoteStopClient.swift */; };
+		B1000000000000000000000F /* RemoteStopClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1000000000000000000000E /* RemoteStopClient.swift */; };
+		B10000000000000000000010 /* QRScannerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1000000000000000000000F /* QRScannerView.swift */; };
+		B10000000000000000000011 /* RemoteControlContractTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C10000000000000000000011 /* RemoteControlContractTests.swift */; };
+		B10000000000000000000012 /* RemoteControlPairingStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C10000000000000000000012 /* RemoteControlPairingStoreTests.swift */; };
+		B10000000000000000000013 /* RemoteStopClientTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C10000000000000000000013 /* RemoteStopClientTests.swift */; };
+		B10000000000000000000014 /* StopLiveActivityIntentTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C10000000000000000000014 /* StopLiveActivityIntentTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -23,6 +36,13 @@
 			proxyType = 1;
 			remoteGlobalIDString = A10000000000000000000002;
 			remoteInfo = CodexLiveActivitySmokeWidget;
+		};
+		D10000000000000000000003 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = E10000000000000000000001 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = A10000000000000000000001;
+			remoteInfo = CodexLiveActivitySmoke;
 		};
 /* End PBXContainerItemProxy section */
 
@@ -51,6 +71,16 @@
 		C10000000000000000000008 /* CodexLiveActivitySmoke.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = CodexLiveActivitySmoke.entitlements; sourceTree = "<group>"; };
 		C10000000000000000000009 /* CodexLiveActivitySmoke.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = CodexLiveActivitySmoke.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		C1000000000000000000000A /* CodexLiveActivitySmokeWidget.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = CodexLiveActivitySmokeWidget.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		C1000000000000000000000B /* RemoteControlContract.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteControlContract.swift; sourceTree = "<group>"; };
+		C1000000000000000000000C /* StopLiveActivityIntent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StopLiveActivityIntent.swift; sourceTree = "<group>"; };
+		C1000000000000000000000D /* RemoteControlPairingStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteControlPairingStore.swift; sourceTree = "<group>"; };
+		C1000000000000000000000E /* RemoteStopClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteStopClient.swift; sourceTree = "<group>"; };
+		C1000000000000000000000F /* QRScannerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QRScannerView.swift; sourceTree = "<group>"; };
+		C10000000000000000000011 /* RemoteControlContractTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteControlContractTests.swift; sourceTree = "<group>"; };
+		C10000000000000000000012 /* RemoteControlPairingStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteControlPairingStoreTests.swift; sourceTree = "<group>"; };
+		C10000000000000000000013 /* RemoteStopClientTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteStopClientTests.swift; sourceTree = "<group>"; };
+		C10000000000000000000014 /* StopLiveActivityIntentTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StopLiveActivityIntentTests.swift; sourceTree = "<group>"; };
+		C10000000000000000000015 /* CodexLiveActivitySmokeTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = CodexLiveActivitySmokeTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -68,6 +98,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		F10000000000000000000007 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -77,6 +114,7 @@
 				E10000000000000000000003 /* App */,
 				E10000000000000000000004 /* Shared */,
 				E10000000000000000000005 /* Widget */,
+				E10000000000000000000007 /* Tests */,
 				E10000000000000000000006 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -86,6 +124,9 @@
 			children = (
 				C10000000000000000000001 /* CodexLiveActivitySmokeApp.swift */,
 				C10000000000000000000002 /* ContentView.swift */,
+				C1000000000000000000000D /* RemoteControlPairingStore.swift */,
+				C1000000000000000000000E /* RemoteStopClient.swift */,
+				C1000000000000000000000F /* QRScannerView.swift */,
 				C10000000000000000000006 /* Info.plist */,
 				C10000000000000000000008 /* CodexLiveActivitySmoke.entitlements */,
 			);
@@ -96,6 +137,8 @@
 			isa = PBXGroup;
 			children = (
 				C10000000000000000000003 /* SmokeActivityAttributes.swift */,
+				C1000000000000000000000B /* RemoteControlContract.swift */,
+				C1000000000000000000000C /* StopLiveActivityIntent.swift */,
 			);
 			path = Shared;
 			sourceTree = "<group>";
@@ -115,8 +158,20 @@
 			children = (
 				C10000000000000000000009 /* CodexLiveActivitySmoke.app */,
 				C1000000000000000000000A /* CodexLiveActivitySmokeWidget.appex */,
+				C10000000000000000000015 /* CodexLiveActivitySmokeTests.xctest */,
 			);
 			name = Products;
+			sourceTree = "<group>";
+		};
+		E10000000000000000000007 /* Tests */ = {
+			isa = PBXGroup;
+			children = (
+				C10000000000000000000011 /* RemoteControlContractTests.swift */,
+				C10000000000000000000012 /* RemoteControlPairingStoreTests.swift */,
+				C10000000000000000000013 /* RemoteStopClientTests.swift */,
+				C10000000000000000000014 /* StopLiveActivityIntentTests.swift */,
+			);
+			path = Tests;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -156,6 +211,23 @@
 			productReference = C1000000000000000000000A /* CodexLiveActivitySmokeWidget.appex */;
 			productType = "com.apple.product-type.app-extension";
 		};
+		A10000000000000000000006 /* CodexLiveActivitySmokeTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = A10000000000000000000007 /* Build configuration list for PBXNativeTarget "CodexLiveActivitySmokeTests" */;
+			buildPhases = (
+				F10000000000000000000006 /* Sources */,
+				F10000000000000000000007 /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				D10000000000000000000004 /* PBXTargetDependency */,
+			);
+			name = CodexLiveActivitySmokeTests;
+			productName = CodexLiveActivitySmokeTests;
+			productReference = C10000000000000000000015 /* CodexLiveActivitySmokeTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -177,6 +249,10 @@
 					A10000000000000000000002 = {
 						CreatedOnToolsVersion = 26.0;
 					};
+					A10000000000000000000006 = {
+						CreatedOnToolsVersion = 26.0;
+						TestTargetID = A10000000000000000000001;
+					};
 				};
 			};
 			buildConfigurationList = A10000000000000000000005 /* Build configuration list for PBXProject "CodexLiveActivitySmoke" */;
@@ -194,6 +270,7 @@
 			targets = (
 				A10000000000000000000001 /* CodexLiveActivitySmoke */,
 				A10000000000000000000002 /* CodexLiveActivitySmokeWidget */,
+				A10000000000000000000006 /* CodexLiveActivitySmokeTests */,
 			);
 		};
 /* End PBXProject section */
@@ -206,6 +283,11 @@
 				B10000000000000000000001 /* CodexLiveActivitySmokeApp.swift in Sources */,
 				B10000000000000000000002 /* ContentView.swift in Sources */,
 				B10000000000000000000003 /* SmokeActivityAttributes.swift in Sources */,
+				B10000000000000000000008 /* RemoteControlContract.swift in Sources */,
+				B1000000000000000000000A /* StopLiveActivityIntent.swift in Sources */,
+				B1000000000000000000000C /* RemoteControlPairingStore.swift in Sources */,
+				B1000000000000000000000E /* RemoteStopClient.swift in Sources */,
+				B10000000000000000000010 /* QRScannerView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -216,6 +298,21 @@
 				B10000000000000000000004 /* SmokeActivityBundle.swift in Sources */,
 				B10000000000000000000005 /* SmokeLiveActivity.swift in Sources */,
 				B10000000000000000000006 /* SmokeActivityAttributes.swift in Sources */,
+				B10000000000000000000009 /* RemoteControlContract.swift in Sources */,
+				B1000000000000000000000B /* StopLiveActivityIntent.swift in Sources */,
+				B1000000000000000000000D /* RemoteControlPairingStore.swift in Sources */,
+				B1000000000000000000000F /* RemoteStopClient.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		F10000000000000000000006 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				B10000000000000000000011 /* RemoteControlContractTests.swift in Sources */,
+				B10000000000000000000012 /* RemoteControlPairingStoreTests.swift in Sources */,
+				B10000000000000000000013 /* RemoteStopClientTests.swift in Sources */,
+				B10000000000000000000014 /* StopLiveActivityIntentTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -227,9 +324,50 @@
 			target = A10000000000000000000002 /* CodexLiveActivitySmokeWidget */;
 			targetProxy = D10000000000000000000001 /* PBXContainerItemProxy */;
 		};
+		D10000000000000000000004 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = A10000000000000000000001 /* CodexLiveActivitySmoke */;
+			targetProxy = D10000000000000000000003 /* PBXContainerItemProxy */;
+		};
 /* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
+		A10000000000000000000008 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				MARKETING_VERSION = 0.1;
+				PRODUCT_BUNDLE_IDENTIFIER = com.xtypo.CodexLiveActivitySmokeTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/CodexLiveActivitySmoke.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/CodexLiveActivitySmoke";
+			};
+			name = Debug;
+		};
+		A10000000000000000000009 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				MARKETING_VERSION = 0.1;
+				PRODUCT_BUNDLE_IDENTIFIER = com.xtypo.CodexLiveActivitySmokeTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/CodexLiveActivitySmoke.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/CodexLiveActivitySmoke";
+			};
+			name = Release;
+		};
 		A10000000000000000000010 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -383,6 +521,15 @@
 			buildConfigurations = (
 				A10000000000000000000010 /* Debug */,
 				A10000000000000000000011 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		A10000000000000000000007 /* Build configuration list for PBXNativeTarget "CodexLiveActivitySmokeTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A10000000000000000000008 /* Debug */,
+				A10000000000000000000009 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

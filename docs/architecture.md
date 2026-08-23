@@ -458,17 +458,80 @@ certificate name is published through Certificate Transparency. Durable replay
 records are retained indefinitely by the production boundary; only the proof's
 entire disposable root is deleted after the listener closes.
 
-That live evidence is a manual two-endpoint protocol pair on the Mac. It is not
-evidence that an iPhone installation imported the bearer, stored it in Keychain,
-received the public control context, or invoked a Live Activity control. Those
-remain the next protected device boundary.
+That live evidence is a manual two-endpoint protocol pair on the Mac and is not
+by itself evidence of the iPhone client. A later separately approved physical
+proof installed the client, imported the bearer into Keychain, received one
+public control context, authenticated on the locked phone, and invoked Stop. The
+Mac accepted one exact `turn/interrupt` response plus the matching terminal
+`interrupted` lifecycle before the relay exited successfully.
 
-An App Intent's authentication policy defaults to `alwaysAllowed`, including
-when the device is locked. The future Stop `LiveActivityIntent` must therefore
-set `requiresAuthentication` explicitly before this project can treat the
-Lock Screen control as authenticated. Reply should open a focused task-scoped
-composer and submit from the foreground app, not attempt inline free-text entry
-on the Live Activity.
+### iPhone pairing and authenticated Stop boundary
+
+The smallest selected phone-side flow uses two QR scans and no enrollment
+endpoint, clipboard, shared file, deep link, APNs credential, or second network
+protocol.
+
+The private pairing QR is an exact flat JSON object containing version `1`, kind
+`pairing`, a canonical tailnet-only HTTPS origin, and a canonical 43-character
+base64url app token encoding exactly 32 bytes. The app rejects duplicate keys,
+escaped-equivalent duplicate keys, unknown fields, paths, queries, fragments,
+userinfo, non-tailnet hosts, and noncanonical credentials before Keychain
+access. A successful scan stores the original validated bytes in the app's
+private Keychain under `kSecAttrAccessibleWhenUnlockedThisDeviceOnly`, reads the
+entry back, and never exposes the token to the widget, ActivityKit, APNs, URLs,
+logs, files, or the clipboard. Keychain Sharing and an App Group are deliberately
+absent because `LiveActivityIntent` executes in the containing app process. If
+post-write read-back fails or mismatches, the store deletes the credential and
+reports failure; if that cleanup itself fails, it reports an explicit uncertain
+state and the app tells the owner not to use Stop.
+
+The public control QR is a separate exact flat JSON object containing version
+`1`, kind `controlContext`, a canonical opaque context ID, and an RFC 3339
+expiry. It contains no origin, bearer, thread ID, turn ID, task text, prompt,
+transcript, command, tool data, or assistant output. The app starts one local
+content-free Live Activity only after validating that object. The activity
+state carries only the public context, expiry, generic status, fixed smoke
+marker, and sequence; an absent or stale context removes the Stop control.
+
+`StopLiveActivityIntent` is undiscoverable and sets
+`authenticationPolicy = .requiresLocalDeviceAuthentication`. After successful
+local authentication, it revalidates the public context, loads the paired
+credential from Keychain, generates one restricted action ID, and sends one
+exact Stop envelope to `POST /v1/turn-actions`. The request expiry is the earlier
+of 60 seconds after issue and the public context expiry. The ephemeral URL
+session disables caches and cookies, rejects redirects, uses bounded timeouts,
+and reads at most 4 KiB of response data. It accepts only HTTP `200` with the
+exact correlated five-field `accepted` receipt and performs no automatic retry.
+The process-local live client holds a one-shot latch for each public control
+context, so overlapping intent executions can generate at most one transport
+request.
+
+Receipt acceptance proves only that the Mac accepted `turn/interrupt`; it does
+not prove the turn ended. The intent therefore changes the generic presentation
+to `Stop requested`, while the proof separately requires the matching Mac-side
+terminal lifecycle. The QR-imported control activity is deliberately created
+without a push token in this phase, so it cannot receive a later APNs terminal
+update; the owner ends it through the app's existing local cleanup control after
+the proof. Connecting terminal relay state back to the same card through APNs
+remains a separate integration. Any attempted request without a confirmed
+receipt becomes `Stop not confirmed`, clears the control, and tells the owner to
+check the Mac before trying again. A locally expired or unavailable preflight
+does not send.
+
+The Mac QR presenter reads a bounded UTF-8 payload from noninteractive standard
+input, renders it only in memory, and writes no payload, clipboard entry,
+argument, or log. It refuses a terminal input stream because ordinary TTY echo
+would disclose typed JSON in terminal output and scrollback. An owner-private
+generator must pipe the payload directly. Repository tests use synthetic
+fixtures and an iOS Simulator only. The completed physical proof separately used
+owner-private credentials, temporary tailnet-only Serve admission, a signed
+install, both QR imports, locked-device authentication, and one real relay-owned
+task. It observed the terminal lifecycle on the Mac, restored the temporary
+Serve/grant state, and ended the local-only card from the app. It sent no APNs
+request; a terminal APNs update is not evidence claimed by this phase.
+Reply remains out of scope and should later open a focused task-scoped
+foreground composer rather than attempt inline free-text entry on the Live
+Activity.
 
 Alternatives remain deliberately bounded. LAN-only transport fails away from
 home. CloudKit private records add offline queueing but also durable reply
@@ -540,6 +603,30 @@ child are closed. A successful Stop smoke additionally requires
 `turn/completed: interrupted`; its accepted HTTP receipt alone is not proof of
 effect. The interrupted lifecycle continues to map to the existing generic
 `Blocked` status because this phase does not add a new presentation state.
+
+The external iPhone Stop proof separates its human operator window from action
+validity. Its public opaque context and wait-for-tap timer may last at most 120
+seconds, while the phone and ingress retain the independent 60-second maximum
+for the authenticated Stop request. The context is not activated by turn
+correlation alone: the external flow reuses the local long-task readiness
+projection and requires one same-thread, same-turn `commandExecution` whose
+source is `agent` or `unifiedExecStartup` and whose status is `inProgress`.
+Only its bounded lifecycle identifiers and allowlisted state are retained.
+Exact duplicate starts are idempotent; a different eligible command or any
+same-item completion before authenticated dispatch fails closed and revokes the
+context. This is a liveness gate, not the local proof's 125-second sustained-work
+observation. The longer setting cannot extend the pre-context App Server
+activation wait beyond 60 seconds. When an authenticated, context-valid,
+durably claimed Stop reaches dispatch before context expiry, the operator timer
+is cleared; the existing 10-second App Server response deadline then applies,
+followed by a separate at-most-10-second interrupted-lifecycle deadline.
+Rejected, unauthorized, stale, replay-conflicting, malformed, or non-Stop
+traffic never receives that timer handoff. The proof latches its one allowed
+Stop only after the active control context resolves and before durable claim, so
+an earlier stale or unknown-context request cannot poison the valid action. A
+replay-conflicting request reaches this proof gate only when its control context
+still resolves as active, so an altered active-context action fails the proof
+while an unknown or expired context remains a content-free rejection.
 
 ## Direct APNs delivery boundary
 

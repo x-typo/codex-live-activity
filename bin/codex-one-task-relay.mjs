@@ -12,7 +12,7 @@ import {
 } from "node:fs/promises";
 import { request as httpRequest } from "node:http";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { isAbsolute, join, resolve } from "node:path";
 import readline from "node:readline";
 import { fileURLToPath } from "node:url";
 
@@ -44,6 +44,25 @@ const CHILD_STOP_TIMEOUT_MS = 2_000;
 const ACTION_RESPONSE_TIMEOUT_MS = 10_000;
 const LOOPBACK_PROOF_ACTIVATION_TIMEOUT_MS = 5_000;
 const LOOPBACK_PROOF_TERMINAL_TIMEOUT_MS = 10_000;
+const LOCAL_LONG_TASK_PROOF_ACTIVATION_TIMEOUT_MS = 60_000;
+const LOCAL_LONG_TASK_PROOF_OBSERVATION_MS = 125_000;
+const LOCAL_LONG_TASK_PROOF_TERMINAL_TIMEOUT_MS = 10_000;
+const LOCAL_LONG_TASK_PROOF_ACTION_ID = "local-long-task-stop";
+const MODEL_OWNED_COMMAND_SOURCES = new Set(["agent", "unifiedExecStartup"]);
+const MAX_EXTERNAL_STOP_PROOF_ACTIVATION_TIMEOUT_MS = 60_000;
+const MAX_EXTERNAL_STOP_PROOF_TIMEOUT_MS = 120_000;
+const EXTERNAL_STOP_PROOF_TERMINAL_TIMEOUT_MS = 10_000;
+const EXTERNAL_STOP_PROOF_INSTALLATION_ID = "external-iphone-stop-proof";
+const EXTERNAL_STOP_CONTEXT_PREFIX = "control context: ";
+const EXTERNAL_STOP_OPTIONS = new Set([
+  "--action-app-token-file",
+  "--action-capability",
+  "--action-expected-authority",
+  "--action-hmac-key-file",
+  "--action-port",
+  "--action-replay-root",
+  "--action-timeout-ms",
+]);
 const MAX_MCP_INVENTORY_BYTES = 4 * 1024 * 1024;
 const MAX_MCP_SERVERS = 256;
 const LOOPBACK_PROOF_CAPABILITY =
@@ -53,6 +72,7 @@ const LOOPBACK_PROOF_REPLY_TEXT = "Continue the bounded local proof.";
 const REPOSITORY_ROOT = resolve(
   fileURLToPath(new URL("../", import.meta.url)),
 );
+const OWNED_PROCESS_GROUP = Symbol("ownedProcessGroup");
 const BARE_CONFIG_KEY = /^[A-Za-z0-9_-]+$/u;
 const DISABLED_FEATURES = [
   "apps",
@@ -72,8 +92,10 @@ const DISABLED_FEATURES = [
 ];
 
 let stderrWritable = true;
+let externalStatusFailure = null;
 process.stderr.on("error", () => {
   stderrWritable = false;
+  externalStatusFailure?.();
 });
 
 function writeSafeStderr(value) {
@@ -108,14 +130,64 @@ function usage() {
     "  --cwd <path>             Task working directory (default: current directory)",
     "  --stale-after-ms <ms>    Running-state stale threshold (default: 60000)",
     "  --loopback-action-proof  Self-drive one synthetic Reply and Stop over localhost",
+    "  --local-long-task-proof  Prove one model-owned command stays active for 125 seconds",
+    "  --local-long-task-observation-ms <ms>",
+    "                           Local observation window (default: 125000)",
+    "  --external-stop-proof    Wait for one externally driven Stop over localhost",
+    "  --action-port <port>     Fixed loopback listener port for external Stop proof",
+    "  --action-expected-authority <authority>",
+    "                           Exact Serve-forwarded DNS Host authority",
+    "  --action-capability <id> Parameterless Tailscale capability identifier",
+    "  --action-app-token-file <absolute-path>",
+    "  --action-hmac-key-file <absolute-path>",
+    "  --action-replay-root <absolute-path>",
+    "  --action-timeout-ms <ms> External proof/context timeout (max: 120000)",
     "  --help                   Show this help",
   ].join("\n");
+}
+
+function parseExternalProofInteger(value, maximum) {
+  if (!/^(?:0|[1-9]\d*)$/u.test(value ?? "")) return null;
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) && parsed >= 1 && parsed <= maximum
+    ? parsed
+    : null;
+}
+
+function isParameterlessCapability(value) {
+  return (
+    typeof value === "string" &&
+    value.length > 0 &&
+    value.length <= 256 &&
+    value === value.toWellFormed() &&
+    /^[A-Za-z0-9][A-Za-z0-9./:_-]*$/u.test(value) &&
+    value.includes("/")
+  );
+}
+
+function isExactExternalStopProofAction(candidate, expected) {
+  return (
+    expected !== null &&
+    candidate.schemaVersion === expected.schemaVersion &&
+    candidate.actionId === expected.actionId &&
+    candidate.controlContextId === expected.controlContextId &&
+    candidate.issuedAt === expected.issuedAt &&
+    candidate.expiresAt === expected.expiresAt &&
+    candidate.action === expected.action &&
+    Object.keys(candidate).length === Object.keys(expected).length
+  );
 }
 
 function parseArguments(argumentsList) {
   let cwd = process.cwd();
   let staleAfterMs = 60_000;
   let loopbackActionProof = false;
+  let localLongTaskProof = false;
+  let localLongTaskObservationMs = LOCAL_LONG_TASK_PROOF_OBSERVATION_MS;
+  let localLongTaskObservationSupplied = false;
+  let externalStopProof = false;
+  const externalValues = new Map();
+  const externalModeRequested = argumentsList.includes("--external-stop-proof");
 
   for (let index = 0; index < argumentsList.length; index += 1) {
     const argument = argumentsList[index];
@@ -143,10 +215,123 @@ function parseArguments(argumentsList) {
       loopbackActionProof = true;
       continue;
     }
-    throw new SafeRelayError(`Unknown option: ${argument}`);
+    if (argument === "--local-long-task-proof") {
+      if (localLongTaskProof) {
+        throw new SafeRelayError(
+          "--local-long-task-proof may be supplied only once",
+        );
+      }
+      localLongTaskProof = true;
+      continue;
+    }
+    if (argument === "--local-long-task-observation-ms") {
+      if (localLongTaskObservationSupplied) {
+        throw new SafeRelayError("local long-task proof options are invalid");
+      }
+      const value = parseExternalProofInteger(
+        argumentsList[index + 1],
+        600_000,
+      );
+      if (value === null || value < 1_000) {
+        throw new SafeRelayError("local long-task proof options are invalid");
+      }
+      localLongTaskObservationMs = value;
+      localLongTaskObservationSupplied = true;
+      index += 1;
+      continue;
+    }
+    if (argument === "--external-stop-proof") {
+      if (externalStopProof) {
+        throw new SafeRelayError("--external-stop-proof may be supplied only once");
+      }
+      externalStopProof = true;
+      continue;
+    }
+    if (EXTERNAL_STOP_OPTIONS.has(argument)) {
+      const value = argumentsList[index + 1];
+      if (value === undefined || externalValues.has(argument)) {
+        throw new SafeRelayError("external Stop proof options are invalid");
+      }
+      externalValues.set(argument, value);
+      index += 1;
+      continue;
+    }
+    throw new SafeRelayError(
+      externalModeRequested
+        ? "external Stop proof options are invalid"
+        : `Unknown option: ${argument}`,
+    );
   }
 
-  return { help: false, cwd, staleAfterMs, loopbackActionProof };
+  if (
+    [loopbackActionProof, localLongTaskProof, externalStopProof].filter(Boolean)
+      .length > 1
+  ) {
+    throw new SafeRelayError("action proof modes are mutually exclusive");
+  }
+  if (!externalStopProof && externalValues.size > 0) {
+    throw new SafeRelayError(
+      "external Stop proof options require --external-stop-proof",
+    );
+  }
+  if (!localLongTaskProof && localLongTaskObservationSupplied) {
+    throw new SafeRelayError(
+      "local long-task proof options require --local-long-task-proof",
+    );
+  }
+
+  let externalStopOptions = null;
+  if (externalStopProof) {
+    const port = parseExternalProofInteger(
+      externalValues.get("--action-port"),
+      65_535,
+    );
+    const timeoutMs = parseExternalProofInteger(
+      externalValues.get("--action-timeout-ms"),
+      MAX_EXTERNAL_STOP_PROOF_TIMEOUT_MS,
+    );
+    const appTokenPath = externalValues.get("--action-app-token-file");
+    const hmacKeyPath = externalValues.get("--action-hmac-key-file");
+    const replayDirectoryPath = externalValues.get("--action-replay-root");
+    const expectedCapability = externalValues.get("--action-capability");
+    const expectedAuthority = externalValues.get(
+      "--action-expected-authority",
+    );
+    const statePaths = [appTokenPath, hmacKeyPath, replayDirectoryPath];
+    if (
+      externalValues.size !== EXTERNAL_STOP_OPTIONS.size ||
+      port === null ||
+      timeoutMs === null ||
+      !isParameterlessCapability(expectedCapability) ||
+      typeof expectedAuthority !== "string" ||
+      expectedAuthority.length === 0 ||
+      !statePaths.every(
+        (path) => typeof path === "string" && isAbsolute(path),
+      ) ||
+      new Set(statePaths).size !== statePaths.length
+    ) {
+      throw new SafeRelayError("external Stop proof options are invalid");
+    }
+    externalStopOptions = {
+      appTokenPath,
+      expectedAuthority,
+      expectedCapability,
+      hmacKeyPath,
+      port,
+      replayDirectoryPath,
+      timeoutMs,
+    };
+  }
+
+  return {
+    help: false,
+    cwd,
+    staleAfterMs,
+    loopbackActionProof,
+    localLongTaskProof,
+    localLongTaskObservationMs,
+    externalStopOptions,
+  };
 }
 
 async function readTaskInput() {
@@ -450,6 +635,34 @@ async function runLoopbackActionProof({
   writeStatus("loopback proof: Stop accepted\n");
 }
 
+function signalOwnedChild(child, signal) {
+  if (!child) return false;
+  if (child[OWNED_PROCESS_GROUP] === true && Number.isInteger(child.pid)) {
+    try {
+      process.kill(-child.pid, signal);
+      return true;
+    } catch (error) {
+      if (error?.code === "ESRCH") return false;
+      throw error;
+    }
+  }
+  return child.kill(signal);
+}
+
+function ownedChildTreeIsRunning(child) {
+  if (!child) return false;
+  if (child[OWNED_PROCESS_GROUP] !== true || !Number.isInteger(child.pid)) {
+    return child.exitCode === null && child.signalCode === null;
+  }
+  try {
+    process.kill(-child.pid, 0);
+    return true;
+  } catch (error) {
+    if (error?.code === "ESRCH") return false;
+    throw error;
+  }
+}
+
 function waitForChildClose(child, timeoutMs) {
   if (child.exitCode !== null || child.signalCode !== null) {
     return Promise.resolve(true);
@@ -468,12 +681,32 @@ function waitForChildClose(child, timeoutMs) {
 }
 
 async function stopOwnedChild(child) {
-  if (!child || child.exitCode !== null || child.signalCode !== null) return;
-  child.kill("SIGTERM");
-  if (await waitForChildClose(child, CHILD_STOP_TIMEOUT_MS)) return;
-  child.kill("SIGKILL");
+  if (!child) return;
+  const processGroupOwned = child[OWNED_PROCESS_GROUP] === true;
+  const childRunning = child.exitCode === null && child.signalCode === null;
+  if (childRunning) {
+    try {
+      signalOwnedChild(child, "SIGTERM");
+    } catch {
+      // A concurrent group exit is resolved by the bounded child-close wait.
+    }
+  }
+  if (!(await waitForChildClose(child, CHILD_STOP_TIMEOUT_MS))) {
+    try {
+      signalOwnedChild(child, "SIGKILL");
+    } catch {
+      // The bounded child-close check below remains authoritative.
+    }
+  }
   if (!(await waitForChildClose(child, CHILD_STOP_TIMEOUT_MS))) {
     throw new SafeRelayError("owned App Server process cleanup failed");
+  }
+  if (processGroupOwned) {
+    try {
+      signalOwnedChild(child, "SIGKILL");
+    } catch {
+      // The group can disappear between wrapper reaping and this final sweep.
+    }
   }
 }
 
@@ -503,7 +736,17 @@ function runOwnedTask({
     let actionProofConfirmed = false;
     let actionProofActivationTimer = null;
     let actionProofTerminalTimer = null;
+    let externalStopResponseObserved = false;
+    let localLongTaskResponseObserved = false;
+    let trackedModelOwnedCommand = null;
+    let pendingModelOwnedCommandStart = null;
+    let stopDispatchStarted = false;
     const pendingActionResponses = new Map();
+
+    const isExternalStopProof = actionProof?.mode === "external-stop";
+    const isLocalLongTaskProof = actionProof?.mode === "local-long-task";
+    const requiresModelOwnedCommandReadiness =
+      isExternalStopProof || isLocalLongTaskProof;
 
     const transport = new JsonlDryRunApnsTransport({
       write: (line) => process.stdout.write(line),
@@ -565,10 +808,21 @@ function runOwnedTask({
         () =>
           fail(
             new SafeRelayError(
-              "loopback action proof did not observe a matching turn start",
+              isExternalStopProof
+                ? "external Stop proof did not observe a model-owned command"
+                : isLocalLongTaskProof
+                  ? "local long-task proof did not observe a sustained command"
+                : "loopback action proof did not observe a matching turn start",
             ),
           ),
-        LOOPBACK_PROOF_ACTIVATION_TIMEOUT_MS,
+        isExternalStopProof
+          ? Math.min(
+              actionProof.timeoutMs,
+              MAX_EXTERNAL_STOP_PROOF_ACTIVATION_TIMEOUT_MS,
+            )
+          : isLocalLongTaskProof
+            ? LOCAL_LONG_TASK_PROOF_ACTIVATION_TIMEOUT_MS
+            : LOOPBACK_PROOF_ACTIVATION_TIMEOUT_MS,
       );
       actionProofActivationTimer.unref();
     }
@@ -625,6 +879,7 @@ function runOwnedTask({
         pendingActionResponses.set(request.id, {
           resolve: resolveResponse,
           reject: rejectResponse,
+          request,
           timeout,
         });
         try {
@@ -656,7 +911,15 @@ function runOwnedTask({
     function maybeConfirmActionProof() {
       if (actionProof === null || actionProofConfirmed || settled) return;
       if (terminalStatus !== null && terminalStatus !== "interrupted") {
-        fail(new SafeRelayError("loopback action proof did not interrupt the task"));
+        fail(
+          new SafeRelayError(
+            isExternalStopProof
+              ? "external Stop proof did not interrupt the task"
+              : isLocalLongTaskProof
+                ? "local long-task proof did not interrupt the task"
+                : "loopback action proof did not interrupt the task",
+          ),
+        );
         return;
       }
       if (!actionProofActionsAccepted || terminalStatus !== "interrupted") {
@@ -664,8 +927,234 @@ function runOwnedTask({
       }
       clearActionProofTerminalTimer();
       actionProofConfirmed = true;
-      actionProof.writeStatus("loopback proof: interrupted lifecycle confirmed\n");
-      child.stdin.end();
+      if (isExternalStopProof) {
+        child.stdin.end();
+      } else {
+        actionProof.writeStatus(
+          isLocalLongTaskProof
+            ? "local long-task proof: interrupted lifecycle confirmed\n"
+            : "loopback proof: interrupted lifecycle confirmed\n",
+        );
+        child.stdin.end();
+      }
+    }
+
+    function acceptExternalStopDispatch(action) {
+      stopDispatchStarted = true;
+      clearActionProofTerminalTimer();
+      return actionBoundary.dispatch(action).then(
+        (receipt) => {
+          if (
+            Object.keys(receipt ?? {}).length !== 6 ||
+            receipt.schemaVersion !== 1 ||
+            receipt.actionId !== action.actionId ||
+            receipt.action !== "stop" ||
+            receipt.outcome !== "accepted" ||
+            receipt.reason !== null ||
+            receipt.appServerMethod !== "turn/interrupt"
+          ) {
+            fail(new SafeRelayError("external Stop proof was rejected"));
+            return receipt;
+          }
+          actionProofActionsAccepted = true;
+          if (terminalStatus === null) {
+            actionProofTerminalTimer = setTimeout(
+              () =>
+                fail(
+                  new SafeRelayError(
+                    "external Stop was not confirmed by terminal lifecycle",
+                  ),
+                ),
+              EXTERNAL_STOP_PROOF_TERMINAL_TIMEOUT_MS,
+            );
+            actionProofTerminalTimer.unref();
+          }
+          maybeConfirmActionProof();
+          return receipt;
+        },
+        (error) => {
+          fail(new SafeRelayError("external Stop proof response was unknown"));
+          throw error;
+        },
+      );
+    }
+
+    function acceptLocalLongTaskDispatch() {
+      stopDispatchStarted = true;
+      return actionBoundary
+        .dispatch({
+          schemaVersion: 1,
+          actionId: LOCAL_LONG_TASK_PROOF_ACTION_ID,
+          action: "stop",
+          threadId: claimedThreadId,
+          expectedTurnId,
+        })
+        .then(
+          (receipt) => {
+            if (
+              Object.keys(receipt ?? {}).length !== 6 ||
+              receipt.schemaVersion !== 1 ||
+              receipt.actionId !== LOCAL_LONG_TASK_PROOF_ACTION_ID ||
+              receipt.action !== "stop" ||
+              receipt.outcome !== "accepted" ||
+              receipt.reason !== null ||
+              receipt.appServerMethod !== "turn/interrupt"
+            ) {
+              fail(new SafeRelayError("local long-task proof was rejected"));
+              return receipt;
+            }
+            actionProofActionsAccepted = true;
+            if (terminalStatus === null) {
+              actionProofTerminalTimer = setTimeout(
+                () =>
+                  fail(
+                    new SafeRelayError(
+                      "local long-task Stop was not confirmed by terminal lifecycle",
+                    ),
+                  ),
+                LOCAL_LONG_TASK_PROOF_TERMINAL_TIMEOUT_MS,
+              );
+              actionProofTerminalTimer.unref();
+            }
+            maybeConfirmActionProof();
+            return receipt;
+          },
+          () => {
+            fail(new SafeRelayError("local long-task proof response was unknown"));
+          },
+        );
+    }
+
+    function projectModelOwnedCommandStart(message) {
+      if (!requiresModelOwnedCommandReadiness) return null;
+      const item = message.params?.item;
+      if (
+        message.params?.threadId !== claimedThreadId ||
+        typeof message.params?.turnId !== "string" ||
+        message.params.turnId.length === 0 ||
+        item?.type !== "commandExecution" ||
+        !MODEL_OWNED_COMMAND_SOURCES.has(item.source) ||
+        item.status !== "inProgress" ||
+        typeof item.id !== "string" ||
+        item.id.length === 0 ||
+        item.id !== item.id.toWellFormed() ||
+        /[\r\n\t]/u.test(item.id) ||
+        [...item.id].length > 128
+      ) {
+        return null;
+      }
+      return Object.freeze({
+        threadId: message.params.threadId,
+        turnId: message.params.turnId,
+        itemId: item.id,
+        type: item.type,
+        source: item.source,
+        status: item.status,
+      });
+    }
+
+    function sameModelOwnedCommand(left, right) {
+      return (
+        left.threadId === right.threadId &&
+        left.turnId === right.turnId &&
+        left.itemId === right.itemId &&
+        left.type === right.type &&
+        left.source === right.source &&
+        left.status === right.status
+      );
+    }
+
+    function startProofFromCorrelatedCommand(candidate) {
+      if (
+        !requiresModelOwnedCommandReadiness ||
+        actionProofStarted ||
+        trackedModelOwnedCommand !== null ||
+        phase !== "running" ||
+        terminalStatus !== null ||
+        expectedTurnId === null ||
+        expectedTurnId !== observedTurnId ||
+        candidate.threadId !== claimedThreadId ||
+        candidate.turnId !== expectedTurnId
+      ) {
+        return false;
+      }
+      trackedModelOwnedCommand = candidate;
+      if (isExternalStopProof) {
+        beginActionProof();
+        return true;
+      }
+      clearActionProofActivationTimer();
+      actionProofStarted = true;
+      actionBoundary = new MockOneTaskTurnActionBoundary({
+        threadId: claimedThreadId,
+        getActiveTurnId: () =>
+          terminalStatus === null && expectedTurnId === observedTurnId
+            ? expectedTurnId
+            : null,
+        sendRequest: sendAppServerActionRequest,
+      });
+      actionProofTerminalTimer = setTimeout(() => {
+        actionProofTerminalTimer = null;
+        if (settled || terminalStatus !== null) return;
+        if (
+          !actionProof.writeStatus(
+            "local long-task proof: observation window confirmed\n",
+          )
+        ) {
+          fail(
+            new SafeRelayError("local long-task proof output was unavailable"),
+          );
+          return;
+        }
+        void acceptLocalLongTaskDispatch();
+      }, actionProof.observationMs);
+      actionProofTerminalTimer.unref();
+      return true;
+    }
+
+    function handleModelOwnedCommandStart(message) {
+      const candidate = projectModelOwnedCommandStart(message);
+      if (candidate === null) return;
+      if (trackedModelOwnedCommand !== null) {
+        if (sameModelOwnedCommand(trackedModelOwnedCommand, candidate)) return;
+        if (!stopDispatchStarted) {
+          throw new SafeRelayError(
+            "App Server emitted another model-owned command before Stop dispatch",
+          );
+        }
+        return;
+      }
+      if (
+        phase === "running" &&
+        expectedTurnId !== null &&
+        observedTurnId !== null
+      ) {
+        if (
+          candidate.threadId !== claimedThreadId ||
+          candidate.turnId !== expectedTurnId ||
+          observedTurnId !== expectedTurnId
+        ) {
+          throw new SafeRelayError(
+            "App Server emitted inconsistent command lifecycle identifiers",
+          );
+        }
+        startProofFromCorrelatedCommand(candidate);
+        return;
+      }
+      if (
+        terminalStatus !== null ||
+        (phase !== "starting-turn" && phase !== "running")
+      ) {
+        return;
+      }
+      if (pendingModelOwnedCommandStart === null) {
+        pendingModelOwnedCommandStart = candidate;
+        return;
+      }
+      if (sameModelOwnedCommand(pendingModelOwnedCommandStart, candidate)) return;
+      throw new SafeRelayError(
+        "App Server emitted too many early command start notifications",
+      );
     }
 
     function beginActionProof() {
@@ -678,6 +1167,8 @@ function runOwnedTask({
       ) {
         return;
       }
+      if (isLocalLongTaskProof) return;
+      if (isExternalStopProof && trackedModelOwnedCommand === null) return;
       clearActionProofActivationTimer();
       actionBoundary = new MockOneTaskTurnActionBoundary({
         threadId: claimedThreadId,
@@ -691,9 +1182,34 @@ function runOwnedTask({
         const publicControlContext = actionComposition.activate({
           threadId: claimedThreadId,
           expectedTurnId,
-          dispatch: (action) => actionBoundary.dispatch(action),
+          dispatch: (action) =>
+            isExternalStopProof
+              ? acceptExternalStopDispatch(action)
+              : actionBoundary.dispatch(action),
         });
         actionProofStarted = true;
+        if (isExternalStopProof) {
+          const artifact = {
+            schemaVersion: 1,
+            kind: "controlContext",
+            controlContextId: publicControlContext.controlContextId,
+            expiresAt: publicControlContext.expiresAt,
+          };
+          if (
+            !actionProof.writeStatus(
+              `${EXTERNAL_STOP_CONTEXT_PREFIX}${JSON.stringify(artifact)}\n`,
+            )
+          ) {
+            fail(new SafeRelayError("external Stop proof output was unavailable"));
+            return;
+          }
+          actionProofTerminalTimer = setTimeout(
+            () => fail(new SafeRelayError("external Stop proof timed out")),
+            actionProof.timeoutMs,
+          );
+          actionProofTerminalTimer.unref();
+          return;
+        }
         void runLoopbackActionProof({
           address: actionProof.address,
           appToken: actionProof.appToken,
@@ -725,13 +1241,20 @@ function runOwnedTask({
             ),
         );
       } catch {
-        fail(new SafeRelayError("loopback action proof could not be activated"));
+        fail(
+          new SafeRelayError(
+            isExternalStopProof
+              ? "external Stop proof could not be activated"
+              : "loopback action proof could not be activated",
+          ),
+        );
       }
     }
 
     function fail(error) {
       if (settled) return;
       settled = true;
+      if (isExternalStopProof) externalStatusFailure = null;
       clearActionProofActivationTimer();
       clearActionProofTerminalTimer();
       revokeActiveTurn();
@@ -747,8 +1270,20 @@ function runOwnedTask({
       lines.close();
       outputSignal.removeEventListener("abort", onOutputAbort);
       child.stdin.end();
-      child.kill("SIGTERM");
+      try {
+        signalOwnedChild(child, "SIGTERM");
+      } catch {
+        // The main cleanup path will report a process-tree cleanup failure.
+      }
       rejectRun(error);
+    }
+
+    if (isExternalStopProof) {
+      externalStatusFailure = () =>
+        fail(new SafeRelayError("external Stop proof output was unavailable"));
+      actionProof.onUnexpectedAction = () =>
+        fail(new SafeRelayError("external Stop proof observed another action"));
+      if (actionProof.unexpectedAction) actionProof.onUnexpectedAction();
     }
 
     function onOutputAbort() {
@@ -757,6 +1292,30 @@ function runOwnedTask({
 
     function finishTerminal(status) {
       if (terminalStatus !== null) return;
+      if (
+        isExternalStopProof &&
+        status === "interrupted" &&
+        !externalStopResponseObserved
+      ) {
+        fail(
+          new SafeRelayError(
+            "external Stop lifecycle preceded App Server acceptance",
+          ),
+        );
+        return;
+      }
+      if (
+        isLocalLongTaskProof &&
+        status === "interrupted" &&
+        !localLongTaskResponseObserved
+      ) {
+        fail(
+          new SafeRelayError(
+            "local long-task lifecycle preceded App Server acceptance",
+          ),
+        );
+        return;
+      }
       terminalStatus = status;
       revokeActiveTurn();
       if (actionProof === null) {
@@ -764,7 +1323,15 @@ function runOwnedTask({
         return;
       }
       if (!actionProofStarted) {
-        fail(new SafeRelayError("task ended before loopback proof activation"));
+        fail(
+          new SafeRelayError(
+            isExternalStopProof
+              ? "task ended before external Stop proof activation"
+              : isLocalLongTaskProof
+                ? "task ended before local long-task proof activation"
+              : "task ended before loopback proof activation",
+          ),
+        );
         return;
       }
       maybeConfirmActionProof();
@@ -800,6 +1367,24 @@ function runOwnedTask({
         acceptTerminal(terminal);
         return;
       }
+      if (
+        requiresModelOwnedCommandReadiness &&
+        pendingModelOwnedCommandStart !== null &&
+        observedTurnId !== null
+      ) {
+        const candidate = pendingModelOwnedCommandStart;
+        pendingModelOwnedCommandStart = null;
+        if (
+          candidate.threadId !== claimedThreadId ||
+          candidate.turnId !== expectedTurnId ||
+          observedTurnId !== expectedTurnId
+        ) {
+          throw new SafeRelayError(
+            "App Server emitted inconsistent command lifecycle identifiers",
+          );
+        }
+        startProofFromCorrelatedCommand(candidate);
+      }
       armActionProofActivationTimer();
       beginActionProof();
     }
@@ -807,6 +1392,29 @@ function runOwnedTask({
     function handleResponse(message) {
       const pendingAction = pendingActionResponses.get(message.id);
       if (pendingAction !== undefined) {
+        if (isExternalStopProof || isLocalLongTaskProof) {
+          if (
+            pendingAction.request.method !== "turn/interrupt" ||
+            message.id !== pendingAction.request.id ||
+            message.error !== undefined ||
+            message.result === null ||
+            typeof message.result !== "object" ||
+            Array.isArray(message.result) ||
+            Object.keys(message.result).length !== 0 ||
+            Object.keys(message).length !== 2
+          ) {
+            throw new SafeRelayError(
+              isExternalStopProof
+                ? "external Stop proof response was unknown"
+                : "local long-task proof response was unknown",
+            );
+          }
+          if (isExternalStopProof) {
+            externalStopResponseObserved = true;
+          } else {
+            localLongTaskResponseObserved = true;
+          }
+        }
         pendingActionResponses.delete(message.id);
         clearTimeout(pendingAction.timeout);
         pendingAction.resolve(message);
@@ -911,6 +1519,34 @@ function runOwnedTask({
         reconcileTurnCorrelation();
       }
 
+      if (message.method === "item/started") {
+        handleModelOwnedCommandStart(message);
+      }
+
+      if (
+        requiresModelOwnedCommandReadiness &&
+        !stopDispatchStarted &&
+        message.method === "item/completed" &&
+        ((actionProofStarted &&
+          message.params?.threadId === claimedThreadId &&
+          message.params?.turnId === expectedTurnId &&
+          message.params?.item?.id === trackedModelOwnedCommand?.itemId) ||
+          (!actionProofStarted &&
+            pendingModelOwnedCommandStart !== null &&
+            message.params?.threadId === pendingModelOwnedCommandStart.threadId &&
+            message.params?.turnId === pendingModelOwnedCommandStart.turnId &&
+            message.params?.item?.id === pendingModelOwnedCommandStart.itemId))
+      ) {
+        fail(
+          new SafeRelayError(
+            isExternalStopProof
+              ? "external Stop proof command ended before authenticated dispatch"
+              : "local long-task proof command ended before the observation window",
+          ),
+        );
+        return;
+      }
+
       if (
         message.method === "turn/completed" &&
         message.params?.threadId === claimedThreadId
@@ -989,6 +1625,7 @@ function runOwnedTask({
       clearActionProofTerminalTimer();
       revokeActiveTurn();
       rejectPendingActionResponses();
+      if (isExternalStopProof) externalStatusFailure = null;
       try {
         clearInterval(sweepInterval);
         if (relay !== null && terminalStatus === null) relay.markDisconnected();
@@ -1007,7 +1644,15 @@ function runOwnedTask({
         return;
       }
       if (actionProof !== null && !actionProofConfirmed) {
-        rejectRun(new SafeRelayError("loopback action proof was not confirmed"));
+        rejectRun(
+          new SafeRelayError(
+            isExternalStopProof
+              ? "external Stop proof was not confirmed"
+              : isLocalLongTaskProof
+                ? "local long-task proof was not confirmed"
+              : "loopback action proof was not confirmed",
+          ),
+        );
         return;
       }
       resolveRun({ terminalStatus });
@@ -1055,16 +1700,16 @@ async function main() {
     if (receivedSignal === null) receivedSignal = signal;
     if (child && child.exitCode === null && child.signalCode === null) {
       if (signalCount === 1) {
-        child.kill("SIGTERM");
+        signalOwnedChild(child, "SIGTERM");
         signalEscalationTimer = setTimeout(() => {
           signalEscalationTimer = null;
-          if (child && child.exitCode === null && child.signalCode === null) {
-            child.kill("SIGKILL");
+          if (child && ownedChildTreeIsRunning(child)) {
+            signalOwnedChild(child, "SIGKILL");
           }
         }, CHILD_STOP_TIMEOUT_MS);
         signalEscalationTimer.unref();
       } else {
-        child.kill("SIGKILL");
+        signalOwnedChild(child, "SIGKILL");
       }
     } else {
       process.stdin.destroy();
@@ -1126,10 +1771,60 @@ async function main() {
       });
       const address = await actionComposition.start();
       actionProof = {
+        mode: "loopback",
         address,
         appToken: actionProofState.appToken,
         writeStatus: writeSafeStderr,
       };
+    } else if (options.localLongTaskProof) {
+      actionProof = {
+        mode: "local-long-task",
+        observationMs: options.localLongTaskObservationMs,
+        writeStatus: writeSafeStderr,
+      };
+    } else if (options.externalStopOptions !== null) {
+      const externalProof = {
+        mode: "external-stop",
+        timeoutMs: options.externalStopOptions.timeoutMs,
+        unexpectedAction: false,
+        onUnexpectedAction: null,
+        writeStatus: writeSafeStderr,
+      };
+      let admittedAction = null;
+      const rejectUnexpectedAction = () => {
+        externalProof.unexpectedAction = true;
+        queueMicrotask(() => externalProof.onUnexpectedAction?.());
+        return false;
+      };
+      actionComposition = await createMacLocalTurnActionComposition({
+        installationId: EXTERNAL_STOP_PROOF_INSTALLATION_ID,
+        expectedCapability: options.externalStopOptions.expectedCapability,
+        admitResolvedAction: (action) => {
+          if (admittedAction === null) {
+            if (action.action !== "stop") return rejectUnexpectedAction();
+            admittedAction = action;
+            return true;
+          }
+          if (isExactExternalStopProofAction(action, admittedAction)) return true;
+          return rejectUnexpectedAction();
+        },
+        appTokenPath: options.externalStopOptions.appTokenPath,
+        hmacKeyPath: options.externalStopOptions.hmacKeyPath,
+        replayDirectoryPath:
+          options.externalStopOptions.replayDirectoryPath,
+        repositoryRoot: REPOSITORY_ROOT,
+        contextLifetimeMs: options.externalStopOptions.timeoutMs,
+      });
+      const address = await actionComposition.start({
+        port: options.externalStopOptions.port,
+        expectedAuthority: options.externalStopOptions.expectedAuthority,
+      });
+      if (address.port !== options.externalStopOptions.port) {
+        throw new SafeRelayError(
+          "external Stop listener did not bind the requested port",
+        );
+      }
+      actionProof = externalProof;
     }
     if (receivedSignal !== null) throw new SafeRelayError("relay interrupted");
     const appServerArguments = [
@@ -1139,9 +1834,11 @@ async function main() {
     ];
     child = spawn("codex", appServerArguments, {
       cwd: options.cwd,
+      detached: process.platform !== "win32",
       env: appServerEnvironment,
       stdio: ["pipe", "pipe", "pipe"],
     });
+    child[OWNED_PROCESS_GROUP] = process.platform !== "win32";
     appServerArguments.length = 0;
     child.stderr.resume();
     if (receivedSignal !== null) throw new SafeRelayError("relay interrupted");
@@ -1157,10 +1854,13 @@ async function main() {
     });
     taskInput = null;
     const result = await run;
-    if (
-      result.terminalStatus !==
-      (options.loopbackActionProof ? "interrupted" : "completed")
-    ) {
+    const expectedTerminalStatus =
+      options.loopbackActionProof ||
+      options.localLongTaskProof ||
+      options.externalStopOptions !== null
+        ? "interrupted"
+        : "completed";
+    if (result.terminalStatus !== expectedTerminalStatus) {
       process.exitCode = 1;
     }
   } catch (error) {
@@ -1182,7 +1882,11 @@ async function main() {
       await actionComposition?.close();
     } catch {
       actionCompositionClosed = false;
-      writeSafeStderr("loopback action composition cleanup failed\n");
+      writeSafeStderr(
+        options?.externalStopOptions !== null
+          ? "external Stop action composition cleanup failed\n"
+          : "loopback action composition cleanup failed\n",
+      );
       process.exitCode = 1;
     }
     let childStopped = true;
@@ -1221,6 +1925,7 @@ async function main() {
     }
     process.off("SIGINT", handleInterrupt);
     process.off("SIGTERM", handleTerminate);
+    externalStatusFailure = null;
     if (receivedSignal === "SIGINT") process.exitCode = 130;
     if (receivedSignal === "SIGTERM") process.exitCode = 143;
   }

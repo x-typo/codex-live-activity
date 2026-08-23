@@ -22,9 +22,13 @@ struct SmokeLiveActivity: Widget {
 
                 Spacer()
 
-                Text("#\(context.state.sequence)")
-                    .font(.caption.monospacedDigit())
-                    .foregroundStyle(.secondary)
+                VStack(alignment: .trailing, spacing: 8) {
+                    Text("#\(context.state.sequence)")
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
+
+                    stopButton(for: context)
+                }
             }
             .padding()
             .activityBackgroundTint(Color.black.opacity(0.88))
@@ -38,6 +42,9 @@ struct SmokeLiveActivity: Widget {
                 DynamicIslandExpandedRegion(.center) {
                     Text(context.state.status)
                         .font(.headline)
+                }
+                DynamicIslandExpandedRegion(.trailing) {
+                    stopButton(for: context)
                 }
                 DynamicIslandExpandedRegion(.bottom) {
                     Text(context.state.detail)
@@ -64,5 +71,25 @@ struct SmokeLiveActivity: Widget {
     private func symbol(for state: SmokeActivityAttributes.ContentState) -> String {
         if state.attentionRequired { return "exclamationmark.triangle.fill" }
         return state.status == "Ready" ? "checkmark.circle.fill" : "bolt.fill"
+    }
+
+    @ViewBuilder
+    private func stopButton(
+        for context: ActivityViewContext<SmokeActivityAttributes>
+    ) -> some View {
+        if let control = context.state.stopControl, !context.isStale {
+            Button(
+                intent: StopLiveActivityIntent(
+                    controlContextID: control.controlContextId,
+                    contextExpiresAt: control.expiresAt
+                )
+            ) {
+                Label("Stop", systemImage: "stop.fill")
+                    .labelStyle(.iconOnly)
+            }
+            .buttonStyle(.bordered)
+            .tint(.red)
+            .accessibilityLabel("Stop Codex task")
+        }
     }
 }

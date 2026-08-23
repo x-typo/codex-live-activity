@@ -3,7 +3,7 @@
 A personal project exploring how to bring Codex task status to iPhone through
 Live Activities and the Dynamic Island.
 
-The repository now contains six bounded components:
+The repository now contains seven bounded components:
 
 - a versioned, privacy-conscious reducer for supported Codex App Server
   lifecycle events; and
@@ -18,7 +18,11 @@ The repository now contains six bounded components:
   only on literal IPv4 loopback for disposable local proofs; and
 - a foreground-only Tailscale admission-proof executable that loads
   pre-created owner-private state, pins the exact Serve-forwarded authority,
-  and exercises a no-side-effect Stop dispatch.
+  and exercises a no-side-effect Stop dispatch; and
+- an iPhone pairing and authenticated Stop prototype that imports one
+  owner-generated credential through a private QR scan, stores it in the local
+  Keychain, accepts a separate public task-control QR, and exposes Stop through
+  a `LiveActivityIntent` that requires local device authentication.
 
 The relay remains credential-free and does not observe tasks owned by the stock
 desktop app or retain task content. It emits generic state labels only; `title`
@@ -84,6 +88,21 @@ turn IDs, task input, and Reply text never enter stdout or the safe proof-status
 lines on stderr. Tailscale remains unconfigured and no phone or APNs action is
 performed.
 
+The separate `--external-stop-proof` mode can keep one public, opaque control
+context available for at most 120 seconds so the owner has time to scan, lock,
+and tap. That human operator window does not widen the authenticated action:
+the iPhone still emits a 60-second-or-shorter Stop request, and ingress keeps
+its existing 60-second request limit. Before emitting that context, the relay
+must correlate the exact owned thread and turn and observe one allowlisted
+`commandExecution` in `inProgress` state from `agent` or
+`unifiedExecStartup`; prompts, command text, output, and unknown item bodies are
+discarded. A same-item completion or a second distinct eligible command before
+authenticated Stop dispatch fails the proof closed. Pre-context App Server
+activation remains capped at 60 seconds. Once a valid Stop reaches the verified
+dispatch boundary, the operator timer gives way to the existing bounded App
+Server response and interrupted-lifecycle deadlines. A stale or unknown control
+context rejects before it can claim the proof's one allowed action.
+
 ## Foreground Tailscale admission proof
 
 `npm run tailscale-admission-proof` opens the same loopback-only composition for
@@ -116,10 +135,12 @@ ran exactly once and every parsed action field matched the emitted Stop body.
 There is no stdout heartbeat: silent output loss is detected on the next write,
 so cleanup remains bounded by the required `--timeout-ms` rather than immediate.
 
-This proves a manual two-endpoint protocol pair, not an iPhone installation.
-The future companion must import or create its bearer in iPhone Keychain and
-receive the public control context through an approved content-free path before
-the project can claim phone pairing or a lock-screen action.
+This executable proves a manual two-endpoint protocol pair, not an iPhone
+installation. The companion described below implements the selected pairing and
+public-context seams. A later separately approved physical proof installed that
+client, imported the two QR shapes, and completed one authenticated locked-phone
+Stop through the real one-task relay; its owner-private credentials and retained
+content-free replay receipt remain outside the repository.
 
 ## Mock interactive turn actions
 
@@ -277,12 +298,53 @@ observed that HTTPS on port 443 forwards the lowercase tailnet FQDN as `Host`
 without `:443`; the listener now adopts that value only through exact configured
 authority pinning. The live manual-client matrix proved forwarded capability,
 wrong-bearer rejection, unknown-context rejection, one no-side-effect dispatch,
-identical durable replay, and replay-conflict rejection. It did not prove
-iPhone Keychain provisioning, Swift control, App Intent, background service, or
-phone action.
-Stop's future App Intent authentication policy is also unselected; the physical
-Stop control must explicitly require authentication before it can be treated as
-lock-screen-safe. Those are separately gated phases.
+identical durable replay, and replay-conflict rejection. That matrix did not by
+itself prove iPhone Keychain provisioning, Swift control, App Intent, or phone
+action. The later bounded physical proof covered the signed install, private
+pairing import, public-context import, locked-phone authentication, one Stop, and
+the matching interrupted App Server lifecycle. It did not create a background
+service or connect terminal relay state back to the card through APNs.
+
+## iPhone pairing and authenticated Stop prototype
+
+The existing smoke app now contains the smallest phone-side control slice. It
+uses two owner-generated QR scans so the long-lived installation credential and
+the short-lived public task context never share a transport:
+
+1. A private pairing QR carries exactly `schemaVersion`, `kind: "pairing"`, one
+   tailnet-only HTTPS origin, and one canonical 32-byte app token. The app
+   validates the complete shape before writing it to its app-private Keychain
+   with `kSecAttrAccessibleWhenUnlockedThisDeviceOnly`; it never displays,
+   logs, copies, or places that token in ActivityKit state.
+2. A separate public control QR carries exactly `schemaVersion`,
+   `kind: "controlContext"`, one opaque 32-byte `controlContextId`, and its
+   expiry. The app validates it and starts a content-free local Live Activity
+   whose state contains only that public context.
+
+The Lock Screen and expanded Dynamic Island show Stop only while the public
+context is present and not stale. `StopLiveActivityIntent` uses
+`requiresLocalDeviceAuthentication`, constructs one exact 60-second-or-shorter
+request, and sends it only to `POST /v1/turn-actions` at the validated
+`https://<tailnet-name>.ts.net` origin. It accepts only the exact correlated
+five-field success receipt and never retries an uncertain request. An accepted
+receipt changes the presentation to `Stop requested`; the matching Mac-side
+Codex lifecycle proves that the turn actually stopped. This locally created
+control activity has no push token, so the owner ends it with the app's existing
+**End Locally** control after the proof. Connecting terminal relay state back to
+this card through APNs remains a later, separately approved integration. The
+physical proof may keep the public context available for up to 120 seconds,
+independently of the unchanged 60-second request limit.
+
+`spikes/apns-live-activity-smoke/scripts/show-qr.swift` is a small Mac presenter
+that reads at most 1,024 UTF-8 bytes from standard input and displays the QR in
+memory. It refuses an interactive terminal because ordinary TTY echo would put
+typed input in terminal output and scrollback. It accepts only piped input from
+an owner-private generator and does not accept payloads in arguments, write a
+file, use the clipboard, or log the payload. Repository tests use synthetic
+fixtures only. The separately approved physical proof supplied owner-private
+credentials outside the repository, temporarily configured Serve admission,
+installed the app, scanned both QR shapes, and stopped one relay-owned task. It
+restored the temporary Serve/grant state afterward and sent no APNs request.
 
 ## Direct APNs sender boundary
 
