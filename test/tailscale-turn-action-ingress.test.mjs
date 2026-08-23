@@ -265,7 +265,7 @@ test("an optional action gate runs before fingerprint, replay, context, or dispa
   assert.equal(state.requests.length, 1);
 });
 
-test("a resolved action gate runs only after active context resolution and before claim", async () => {
+test("a resolved action gate runs only after active context resolution, including conflicts", async () => {
   const unknownState = createHarness({
     resolve: false,
     admitResolvedAction: () => true,
@@ -288,6 +288,36 @@ test("a resolved action gate runs only after active context resolution and befor
   assert.equal(rejectedState.replayStore.inspectCalls.length, 1);
   assert.deepEqual(rejectedState.replayStore.claimCalls, []);
   assert.deepEqual(rejectedState.requests, []);
+
+  const conflictState = createHarness({
+    admitResolvedAction: (action) =>
+      action.issuedAt === "2026-08-22T20:00:00.000Z",
+  });
+  const accepted = await conflictState.handler(requestFor(remoteStop()));
+  assert.equal(accepted.statusCode, 200);
+
+  const activeConflict = await conflictState.handler(
+    requestFor(remoteStop({ issuedAt: "2026-08-22T20:00:00.001Z" })),
+  );
+  assert.equal(activeConflict.statusCode, 400);
+  assert.equal(receiptFrom(activeConflict).reason, "invalidRequest");
+  assert.equal(conflictState.resolvedAdmissionCalls, 2);
+  assert.equal(conflictState.replayStore.claimCalls.length, 1);
+  assert.equal(conflictState.requests.length, 1);
+
+  const unknownConflict = await conflictState.handler(
+    requestFor(
+      remoteStop({
+        controlContextId: "B".repeat(43),
+        issuedAt: "2026-08-22T20:00:00.002Z",
+      }),
+    ),
+  );
+  assert.equal(unknownConflict.statusCode, 409);
+  assert.equal(receiptFrom(unknownConflict).reason, "replayConflict");
+  assert.equal(conflictState.resolvedAdmissionCalls, 2);
+  assert.equal(conflictState.replayStore.claimCalls.length, 1);
+  assert.equal(conflictState.requests.length, 1);
 });
 
 test("the remote schema carries opaque correlation and excludes private task IDs", () => {

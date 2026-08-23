@@ -620,7 +620,10 @@ followed by a separate at-most-10-second interrupted-lifecycle deadline.
 Rejected, unauthorized, stale, replay-conflicting, malformed, or non-Stop
 traffic never receives that timer handoff. The proof latches its one allowed
 Stop only after the active control context resolves and before durable claim, so
-an earlier stale or unknown-context request cannot poison the valid action.
+an earlier stale or unknown-context request cannot poison the valid action. A
+replay-conflicting request reaches this proof gate only when its control context
+still resolves as active, so an altered active-context action fails the proof
+while an unknown or expired context remains a content-free rejection.
 
 ## Direct APNs delivery boundary
 

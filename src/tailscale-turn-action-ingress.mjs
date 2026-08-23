@@ -573,7 +573,10 @@ export function createTailscaleTurnActionRequestHandler({
     if (inspected.state === "completed") {
       return response(statusFor(inspected.receipt), inspected.receipt);
     }
-    if (inspected.state === "conflict") {
+    if (
+      inspected.state === "conflict" &&
+      admitResolvedAction === undefined
+    ) {
       return response(409, rejected("replayConflict", action));
     }
     if (inspected.state === "uncertain") {
@@ -594,12 +597,21 @@ export function createTailscaleTurnActionRequestHandler({
         },
       );
     } catch {
+      if (inspected.state === "conflict") {
+        return response(409, rejected("replayConflict", action));
+      }
       return response(503, rejected("unavailable", action));
     }
     if (context === "expired") {
+      if (inspected.state === "conflict") {
+        return response(409, rejected("replayConflict", action));
+      }
       return response(409, rejected("expiredControlContext", action));
     }
     if (context === null) {
+      if (inspected.state === "conflict") {
+        return response(409, rejected("replayConflict", action));
+      }
       return response(409, rejected("unknownControlContext", action));
     }
 
@@ -611,6 +623,9 @@ export function createTailscaleTurnActionRequestHandler({
       if (!admitted) {
         return response(400, rejected("invalidRequest", action));
       }
+    }
+    if (inspected.state === "conflict") {
+      return response(409, rejected("replayConflict", action));
     }
 
     let claim;

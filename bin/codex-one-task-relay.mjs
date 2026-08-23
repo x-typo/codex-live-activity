@@ -1799,18 +1799,9 @@ async function main() {
       actionComposition = await createMacLocalTurnActionComposition({
         installationId: EXTERNAL_STOP_PROOF_INSTALLATION_ID,
         expectedCapability: options.externalStopOptions.expectedCapability,
-        admitAction: (action) => {
-          if (
-            action.action === "stop" &&
-            (admittedAction === null ||
-              isExactExternalStopProofAction(action, admittedAction))
-          ) {
-            return true;
-          }
-          return rejectUnexpectedAction();
-        },
         admitResolvedAction: (action) => {
           if (admittedAction === null) {
+            if (action.action !== "stop") return rejectUnexpectedAction();
             admittedAction = action;
             return true;
           }
