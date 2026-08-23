@@ -47,6 +47,9 @@ final class RemoteControlContractTests: XCTestCase {
     }
 
     func testRejectsOriginAttacks() {
+        let overlongTailnetHost =
+            (Array(repeating: "a", count: 124) + ["relay", "ts", "net"])
+                .joined(separator: ".")
         for origin in [
             "http://relay.example.ts.net",
             "https://user@relay.example.ts.net",
@@ -55,7 +58,10 @@ final class RemoteControlContractTests: XCTestCase {
             "https://relay.example.ts.net#fragment",
             "https://relay.example.ts.net:444",
             "https://relay.example.com",
-            "https://relay.example.ts.net.evil.example"
+            "https://relay.example.ts.net.evil.example",
+            "https://.relay.ts.net",
+            "https://relay..example.ts.net",
+            "https://\(overlongTailnetHost)"
         ] {
             XCTAssertThrowsError(try RemoteControlContract.decodePairingCredential(from: json([
                 "schemaVersion": 1, "kind": "pairing", "origin": origin, "appToken": token

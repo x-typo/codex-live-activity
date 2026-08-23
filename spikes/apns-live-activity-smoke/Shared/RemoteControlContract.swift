@@ -210,10 +210,12 @@ private enum RemoteControlOrigin {
     }
 
     private static func isTailnetDNSName(_ host: String) -> Bool {
-        guard host.hasSuffix(".ts.net"), host != "ts.net" else {
+        guard host.utf8.count <= 253,
+              host.hasSuffix(".ts.net"),
+              host != "ts.net" else {
             return false
         }
-        return host.split(separator: ".").allSatisfy { label in
+        return host.split(separator: ".", omittingEmptySubsequences: false).allSatisfy { label in
             !label.isEmpty && label.count <= 63 &&
                 label.first != "-" && label.last != "-" &&
                 label.allSatisfy { $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "-") }
