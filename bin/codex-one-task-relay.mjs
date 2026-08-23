@@ -965,10 +965,7 @@ function runOwnedTask({
                     "external Stop was not confirmed by terminal lifecycle",
                   ),
                 ),
-              Math.min(
-                actionProof.timeoutMs,
-                EXTERNAL_STOP_PROOF_TERMINAL_TIMEOUT_MS,
-              ),
+              EXTERNAL_STOP_PROOF_TERMINAL_TIMEOUT_MS,
             );
             actionProofTerminalTimer.unref();
           }

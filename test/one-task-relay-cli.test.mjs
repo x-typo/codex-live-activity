@@ -1366,70 +1366,62 @@ test("CLI external Stop mode rejects a context timeout above 120 seconds", async
   }
 });
 
-test("CLI external Stop mode preserves completion grace after a valid late action", async () => {
+test("CLI external Stop mode preserves its terminal deadline after dispatch", async () => {
   const stateBefore = await relayStateHomes();
   const fixture = await createExternalStopFixture();
   try {
     await withFakeCodex(async (fakeBinaryDirectory) => {
-        const port = await unusedPort();
-        const expectedAuthority = `relay-proof.test:${port}`;
-        const logPath = join(fakeBinaryDirectory, "fake-codex.jsonl");
-        const relay = spawn(
-          process.execPath,
-          externalStopArguments(fixture, port, expectedAuthority, 500),
-          {
-            env: {
-              ...process.env,
-              FAKE_CODEX_LOG_PATH: logPath,
-              FAKE_CODEX_MODE: "external-stop-proof-delayed-stop",
-              PATH: `${fakeBinaryDirectory}${delimiter}${process.env.PATH}`,
-            },
-            stdio: ["pipe", "pipe", "pipe"],
+      const port = await unusedPort();
+      const expectedAuthority = `relay-proof.test:${port}`;
+      const logPath = join(fakeBinaryDirectory, "fake-codex.jsonl");
+      const relay = spawn(
+        process.execPath,
+        externalStopArguments(fixture, port, expectedAuthority, 200),
+        {
+          env: {
+            ...process.env,
+            FAKE_CODEX_LOG_PATH: logPath,
+            FAKE_CODEX_MODE: "external-stop-proof-delayed-terminal",
+            PATH: `${fakeBinaryDirectory}${delimiter}${process.env.PATH}`,
           },
+          stdio: ["pipe", "pipe", "pipe"],
+        },
+      );
+      const completed = collectChild(relay);
+      const contextOutput = waitForOutput(
+        relay.stderr,
+        /control context: \{[^\n]+\}\n/u,
+      );
+      relay.stdin.end("SENSITIVE_EXTERNAL_TERMINAL_DEADLINE_INPUT");
+      try {
+        const context = parseExternalStopContext(await contextOutput);
+        const response = await sendExternalAction({
+          port,
+          expectedAuthority,
+          action: externalStopAction(context, "ios-terminal-deadline-stop-1"),
+        });
+        assert.equal(response.statusCode, 200);
+        const result = await waitWithin(
+          completed,
+          2_000,
+          "external Stop relay did not preserve its terminal deadline",
         );
-        const completed = collectChild(relay);
-        const contextOutput = waitForOutput(
-          relay.stderr,
-          /control context: \{[^\n]+\}\n/u,
+        assert.equal(result.code, 0, result.stderr);
+        assert.equal(
+          (await readFakeLog(logPath)).filter(
+            (entry) =>
+              entry.kind === "method" && entry.value === "turn/interrupt",
+          ).length,
+          1,
         );
-        relay.stdin.end("SENSITIVE_EXTERNAL_LATE_ACTION_INPUT");
-        try {
-          const context = parseExternalStopContext(await contextOutput);
-          const response = await sendExternalAction({
-            port,
-            expectedAuthority,
-            action: externalStopAction(context, "ios-late-stop-1"),
-          });
-          assert.equal(response.statusCode, 200);
-          const result = await waitWithin(
-            completed,
-            2_000,
-            "external Stop relay did not preserve completion grace",
-          );
-          assert.equal(result.code, 0, result.stderr);
-          assert.equal(
-            (await readFakeLog(logPath)).filter(
-              (entry) =>
-                entry.kind === "method" && entry.value === "turn/interrupt",
-            ).length,
-            1,
-          );
-          assert.equal((await readdir(fixture.replayRoot)).length, 1);
-          await assertPortClosed(port);
-        } finally {
-          if (relay.exitCode === null && relay.signalCode === null) {
-            relay.kill("SIGKILL");
-          }
+        assert.equal((await readdir(fixture.replayRoot)).length, 1);
+        await assertPortClosed(port);
+      } finally {
+        if (relay.exitCode === null && relay.signalCode === null) {
+          relay.kill("SIGKILL");
         }
-      },
-      {
-        rewriteSource: (source) =>
-          source.replace(
-            "setTimeout(completeInterrupt, 100);",
-            "setTimeout(completeInterrupt, 700);",
-          ),
-      },
-    );
+      }
+    });
   } finally {
     await rm(fixture.root, { recursive: true, force: true });
   }
