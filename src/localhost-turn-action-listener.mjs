@@ -1,10 +1,17 @@
 import { createServer } from "node:http";
 
-import { RELAY_TURN_ACTION_SCHEMA_VERSION } from "./relay-turn-action.mjs";
+import {
+  REMOTE_ACTION_RECEIPT_HANDLER_PHASES,
+  createRemoteActionReceipt,
+  projectRemoteActionReceipt,
+  serializeRemoteActionReceipt,
+} from "./remote-action-receipt.mjs";
 import { parseJsonRejectingDuplicateMembers } from "./strict-json.mjs";
 import {
   MAX_REMOTE_ACTION_BODY_BYTES,
   REMOTE_TURN_ACTION_PATH,
+  hasRemoteActionJsonContentType,
+  parseRemoteActionRequestBody,
 } from "./tailscale-turn-action-ingress.mjs";
 
 export const LOCALHOST_TURN_ACTION_HOST = "127.0.0.1";
@@ -37,26 +44,6 @@ const SAFE_RESPONSE_HEADERS = Object.freeze({
   "content-type": "application/json; charset=utf-8",
   "x-content-type-options": "nosniff",
 });
-const SAFE_REASONS = new Set([
-  "appServerRejected",
-  "busy",
-  "duplicateAction",
-  "expiredControlContext",
-  "expiredRequest",
-  "invalidAction",
-  "invalidRequest",
-  "noActiveTurn",
-  "outcomeUnknown",
-  "replayConflict",
-  "staleTurn",
-  "stopPending",
-  "unauthorized",
-  "unavailable",
-  "unknownControlContext",
-  "wrongThread",
-]);
-const SAFE_STATUS_CODES = new Set([200, 400, 401, 404, 409, 413, 502, 503]);
-const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}(?![\s\S])/u;
 
 function isObject(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -72,46 +59,26 @@ function hasExactKeys(value, expectedKeys) {
   );
 }
 
-function safeReceipt(reason) {
-  return JSON.stringify({
-    schemaVersion: RELAY_TURN_ACTION_SCHEMA_VERSION,
-    actionId: null,
-    action: null,
+function adapterResponse(statusCode, reason, action = null) {
+  const receipt = createRemoteActionReceipt({
+    action,
     outcome: "rejected",
     reason,
   });
-}
-
-function adapterResponse(statusCode, reason) {
   return {
     statusCode,
     headers: SAFE_RESPONSE_HEADERS,
-    body: safeReceipt(reason),
+    body: serializeRemoteActionReceipt(receipt),
   };
 }
 
-function responseStatusMatchesReceipt(statusCode, receipt) {
-  if (receipt.outcome === "accepted") return statusCode === 200;
-  if (receipt.reason === "invalidRequest") {
-    return [400, 404, 413].includes(statusCode);
-  }
-  if (receipt.reason === "invalidAction") return statusCode === 400;
-  if (receipt.reason === "unauthorized") return statusCode === 401;
-  if (["unavailable", "outcomeUnknown"].includes(receipt.reason)) {
-    return statusCode === 503;
-  }
-  if (receipt.reason === "appServerRejected") return statusCode === 502;
-  return statusCode === 409;
-}
-
-function selectSafeIngressResponse(value) {
+function selectSafeIngressResponse(value, receiptOptions = {}) {
   try {
     if (!hasExactKeys(value, ["body", "headers", "statusCode"])) return null;
     const statusCode = value.statusCode;
     const body = value.body;
     const headers = value.headers;
     if (
-      !SAFE_STATUS_CODES.has(statusCode) ||
       typeof body !== "string" ||
       Buffer.byteLength(body) > 4_096 ||
       !hasExactKeys(headers, Object.keys(SAFE_RESPONSE_HEADERS)) ||
@@ -122,34 +89,16 @@ function selectSafeIngressResponse(value) {
       return null;
     }
 
-    const receipt = parseJsonRejectingDuplicateMembers(body);
-    if (
-      !hasExactKeys(receipt, [
-        "action",
-        "actionId",
-        "outcome",
-        "reason",
-        "schemaVersion",
-      ]) ||
-      receipt.schemaVersion !== RELAY_TURN_ACTION_SCHEMA_VERSION ||
-      !(
-        receipt.actionId === null ||
-        (typeof receipt.actionId === "string" && SAFE_ID.test(receipt.actionId))
-      ) ||
-      ![null, "reply", "stop"].includes(receipt.action) ||
-      (receipt.actionId === null) !== (receipt.action === null) ||
-      !["accepted", "rejected"].includes(receipt.outcome) ||
-      !(
-        receipt.reason === null ||
-        (typeof receipt.reason === "string" && SAFE_REASONS.has(receipt.reason))
-      ) ||
-      (receipt.outcome === "accepted" && receipt.reason !== null) ||
-      (receipt.outcome === "rejected" && receipt.reason === null) ||
-      !responseStatusMatchesReceipt(statusCode, receipt)
-    ) {
-      return null;
-    }
-    return { statusCode, body, headers: SAFE_RESPONSE_HEADERS };
+    const receipt = projectRemoteActionReceipt(
+      parseJsonRejectingDuplicateMembers(body),
+      { ...receiptOptions, statusCode },
+    );
+    if (receipt === null) return null;
+    return {
+      statusCode,
+      headers: SAFE_RESPONSE_HEADERS,
+      body: serializeRemoteActionReceipt(receipt),
+    };
   } catch {
     return null;
   }
@@ -239,10 +188,16 @@ function readBoundedBody(request) {
   });
 }
 
-function writeResponse(response, value) {
+function writeResponse(response, value, receiptOptions) {
   if (response.destroyed || response.writableEnded) return;
+  const fallbackAction =
+    receiptOptions?.handlerPhase ===
+    REMOTE_ACTION_RECEIPT_HANDLER_PHASES.validAction
+      ? receiptOptions.expectedAction
+      : null;
   const selected =
-    selectSafeIngressResponse(value) ?? adapterResponse(503, "unavailable");
+    selectSafeIngressResponse(value, receiptOptions) ??
+    adapterResponse(503, "unavailable", fallbackAction);
   try {
     response.strictContentLength = true;
     response.setHeader("connection", "close");
@@ -308,6 +263,15 @@ async function handleNodeRequest(
     return;
   }
 
+  const hasJsonContentType = hasRemoteActionJsonContentType(
+    inspected.headers["content-type"],
+  );
+  const expectedAction = parseRemoteActionRequestBody(bodyResult.body);
+  const handlerPhase = !hasJsonContentType
+    ? REMOTE_ACTION_RECEIPT_HANDLER_PHASES.invalidContentType
+    : expectedAction === null
+      ? REMOTE_ACTION_RECEIPT_HANDLER_PHASES.invalidAction
+      : REMOTE_ACTION_RECEIPT_HANDLER_PHASES.validAction;
   let result;
   try {
     result = await handleRequest({
@@ -317,9 +281,9 @@ async function handleNodeRequest(
       body: bodyResult.body,
     });
   } catch {
-    result = adapterResponse(503, "unavailable");
+    result = null;
   }
-  writeResponse(response, result);
+  writeResponse(response, result, { expectedAction, handlerPhase });
 }
 
 function validatePort(port) {
@@ -427,7 +391,13 @@ export function createLocalhostTurnActionListener({
 
   const close = () => {
     if (closePromise !== null) return closePromise;
-    closePromise = (async () => {
+    let resolveClose;
+    let rejectClose;
+    closePromise = new Promise((resolve, reject) => {
+      resolveClose = resolve;
+      rejectClose = reject;
+    });
+    void (async () => {
       closing = true;
       let closeServerPromise = null;
       if (server.listening) {
@@ -473,7 +443,7 @@ export function createLocalhostTurnActionListener({
           cause: revocationError,
         });
       }
-    })();
+    })().then(resolveClose, rejectClose);
     return closePromise;
   };
 

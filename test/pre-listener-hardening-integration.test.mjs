@@ -153,8 +153,16 @@ test("wires the hardened seams through literal localhost without retained task c
 
     const first = await sendLoopbackRequest(address.port, request);
     const retry = await sendLoopbackRequest(address.port, request);
+    const expectedReceipt = JSON.stringify({
+      schemaVersion: 1,
+      actionId: action.actionId,
+      action: action.action,
+      outcome: "accepted",
+      reason: null,
+    });
     assert.equal(first.statusCode, 200);
-    assert.deepEqual(JSON.parse(retry.body), JSON.parse(first.body));
+    assert.equal(first.body, expectedReceipt);
+    assert.equal(retry.body, expectedReceipt);
     assert.equal(dispatched.length, 1);
     assert.equal(dispatched[0].text, REPLY_TEXT);
 
@@ -188,7 +196,7 @@ test("wires the hardened seams through literal localhost without retained task c
       restartedAddress.port,
       request,
     );
-    assert.deepEqual(JSON.parse(restartRetry.body), JSON.parse(first.body));
+    assert.equal(restartRetry.body, expectedReceipt);
     assert.equal(dispatched.length, 1);
     await restartedListener.close();
 

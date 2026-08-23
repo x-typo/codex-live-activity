@@ -326,13 +326,14 @@ real device context to accept in this phase.
 
 The ingress uses a file replay store with an atomic claim-before-send contract.
 Its key is the verified installation ID plus action ID; the filename is derived
-from their SHA-256 hash. The owner-private JSON record retains those two safe
-identifiers for integrity validation, plus a keyed-HMAC fingerprint of the
-canonical request, the request expiry, and the eventual content-free receipt. A
-plain reply-text hash is not retained because guessable text could be recovered
-by comparison. The HMAC key loader requires a separate owner-private external
-file containing the canonical base64url encoding of exactly 32 random bytes and
-keeps the key stable for at least the replay-retention horizon.
+from their SHA-256 hash. The owner-private version 2 JSON record retains those
+two safe identifiers and the safe action kind for integrity validation, plus a
+keyed-HMAC fingerprint of the canonical request, the request expiry, and the
+eventual content-free receipt. A plain reply-text hash is not retained because
+guessable text could be recovered by comparison. The HMAC key loader requires a
+separate owner-private external file containing the canonical base64url
+encoding of exactly 32 random bytes and keeps the key stable for at least the
+replay-retention horizon.
 
 The replay root must already exist outside the repository as an owner-owned
 `0700` non-symlink directory. Claims use exclusive, no-follow creation of a
@@ -343,8 +344,10 @@ sync failure remains a durability failure even if the completed bytes are later
 visible. Malformed, truncated, linked, permission-invalid, replaced-root, and
 other ambiguous states are never considered missing.
 
-- same ID and same fingerprint after completion returns the stored receipt;
-- same ID and a different fingerprint rejects as `replayConflict`;
+- same ID, action kind, and fingerprint after completion returns the stored
+  receipt;
+- same ID with a different action kind or fingerprint rejects as
+  `replayConflict`;
 - a claimed action without a committed receipt returns `outcomeUnknown` and is
   not dispatched again; and
 - a receipt-commit failure after dispatch also returns `outcomeUnknown` and
@@ -355,6 +358,31 @@ matching `turn/completed` lifecycle with terminal status `interrupted` proves
 the effect. Reply acceptance still requires `turn/steer` to return the same
 private turn ID. All network receipts project only schema version, safe action
 ID, action kind, outcome, and an allowlisted reason.
+
+`src/remote-action-receipt.mjs` is the canonical table and projector for that
+public shape. Ingress production, replay persistence, and listener egress all
+use it rather than maintaining separate allowlists or status predicates:
+
+| Outcome / reason | Correlation | Allowed HTTP status |
+| --- | --- | --- |
+| `accepted` / `null` | exact submitted action | `200` |
+| `invalidAction` | `null` / `null` only | `400` |
+| `unauthorized` | `null` / `null` only | `401` |
+| `invalidRequest` | pre-action `null` / `null` | `400`, `404`, `413` |
+| `invalidRequest` | exact submitted action | `400` |
+| `unavailable` | outer-adapter `null` / `null` or exact submitted action | `503` |
+| `outcomeUnknown` | exact submitted action | `503` |
+| `appServerRejected` | exact submitted action | `502` |
+| `busy`, `duplicateAction`, `expiredControlContext`, `expiredRequest`, `noActiveTurn`, `replayConflict`, `staleTurn`, `stopPending`, `unknownControlContext`, `wrongThread` | exact submitted action | `409` |
+
+The listener parses the request body through the same remote-action validator
+used by ingress, retains only the transient validated action for correlation,
+classifies the handler call as invalid content type, invalid action, or valid
+action, and reserializes every admitted receipt into fixed field order. The
+table permits only the ingress outcomes possible in that observed phase. Mixed
+nullability, a different action ID or kind, and any reason/status/correlation or
+handler-phase combination outside the table fail closed as an uncorrelated
+`unavailable` adapter response.
 
 There is no server or cloud command queue. If the Mac, Tailscale, ingress, replay
 store, or App Server is unavailable, the phone reports not delivered or outcome

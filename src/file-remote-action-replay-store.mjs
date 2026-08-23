@@ -8,31 +8,15 @@ import {
 import { join } from "node:path";
 
 import { validateOwnerPrivateExternalDirectory } from "./owner-private-state.mjs";
+import {
+  projectRemoteActionCorrelation,
+  projectRemoteActionReceipt,
+} from "./remote-action-receipt.mjs";
 import { parseJsonRejectingDuplicateMembers } from "./strict-json.mjs";
 
 const MAX_REPLAY_RECORD_BYTES = 4_096;
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}(?![\s\S])/u;
 const FINGERPRINT = /^[a-f0-9]{64}$/u;
-const ACTIONS = new Set(["reply", "stop"]);
-const OUTCOMES = new Set(["accepted", "rejected"]);
-const SAFE_REASONS = new Set([
-  "appServerRejected",
-  "busy",
-  "duplicateAction",
-  "expiredControlContext",
-  "expiredRequest",
-  "invalidAction",
-  "invalidRequest",
-  "noActiveTurn",
-  "outcomeUnknown",
-  "replayConflict",
-  "staleTurn",
-  "stopPending",
-  "unauthorized",
-  "unavailable",
-  "unknownControlContext",
-  "wrongThread",
-]);
 
 function isObject(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -53,12 +37,19 @@ function isSafeId(value) {
 }
 
 function validateReplayInput(value, { withReceipt = false } = {}) {
-  const keys = ["actionId", "expiresAtMs", "fingerprint", "installationId"];
+  const keys = [
+    "action",
+    "actionId",
+    "expiresAtMs",
+    "fingerprint",
+    "installationId",
+  ];
   if (withReceipt) keys.push("receipt");
+  const correlation = projectRemoteActionCorrelation(value);
   if (
     !hasExactKeys(value, keys) ||
+    correlation === null ||
     !isSafeId(value.installationId) ||
-    !isSafeId(value.actionId) ||
     typeof value.fingerprint !== "string" ||
     !FINGERPRINT.test(value.fingerprint) ||
     !Number.isSafeInteger(value.expiresAtMs)
@@ -67,49 +58,29 @@ function validateReplayInput(value, { withReceipt = false } = {}) {
   }
   const input = {
     installationId: value.installationId,
-    actionId: value.actionId,
+    actionId: correlation.actionId,
+    action: correlation.action,
     fingerprint: value.fingerprint,
     expiresAtMs: value.expiresAtMs,
   };
   if (withReceipt) {
-    input.receipt = validateReceipt(value.receipt);
-    if (input.receipt.actionId !== input.actionId) {
-      throw new TypeError("invalid replay receipt");
-    }
+    input.receipt = validateReceipt(value.receipt, correlation);
   }
   return input;
 }
 
-function validateReceipt(value) {
-  if (
-    !hasExactKeys(value, [
-      "action",
-      "actionId",
-      "outcome",
-      "reason",
-      "schemaVersion",
-    ]) ||
-    value.schemaVersion !== 1 ||
-    !isSafeId(value.actionId) ||
-    !ACTIONS.has(value.action) ||
-    !OUTCOMES.has(value.outcome) ||
-    (value.reason !== null && !SAFE_REASONS.has(value.reason)) ||
-    (value.outcome === "accepted" && value.reason !== null) ||
-    (value.outcome === "rejected" && value.reason === null)
-  ) {
-    throw new TypeError("invalid replay receipt");
-  }
-  return {
-    schemaVersion: 1,
-    actionId: value.actionId,
-    action: value.action,
-    outcome: value.outcome,
-    reason: value.reason,
-  };
+function validateReceipt(value, expectedAction) {
+  const receipt = projectRemoteActionReceipt(value, {
+    expectedAction,
+    requireCorrelation: true,
+  });
+  if (receipt === null) throw new TypeError("invalid replay receipt");
+  return receipt;
 }
 
 function validateStoredRecord(value) {
   const baseKeys = [
+    "action",
     "actionId",
     "expiresAtMs",
     "fingerprint",
@@ -120,30 +91,31 @@ function validateStoredRecord(value) {
   const completed = value?.state === "completed";
   if (
     !hasExactKeys(value, completed ? [...baseKeys, "receipt"] : baseKeys) ||
-    value.version !== 1 ||
+    value.version !== 2 ||
     !["claimed", "completed"].includes(value.state) ||
     !isSafeId(value.installationId) ||
-    !isSafeId(value.actionId) ||
     typeof value.fingerprint !== "string" ||
     !FINGERPRINT.test(value.fingerprint) ||
     !Number.isSafeInteger(value.expiresAtMs)
   ) {
     return null;
   }
+  const correlation = projectRemoteActionCorrelation(value);
+  if (correlation === null) return null;
   let receipt;
   if (completed) {
     try {
-      receipt = validateReceipt(value.receipt);
+      receipt = validateReceipt(value.receipt, correlation);
     } catch {
       return null;
     }
-    if (receipt.actionId !== value.actionId) return null;
   }
   return {
-    version: 1,
+    version: 2,
     state: value.state,
     installationId: value.installationId,
-    actionId: value.actionId,
+    actionId: correlation.actionId,
+    action: correlation.action,
     fingerprint: value.fingerprint,
     expiresAtMs: value.expiresAtMs,
     ...(completed ? { receipt } : {}),
@@ -163,6 +135,7 @@ function matchingRecord(stored, requested) {
   return (
     stored.installationId === requested.installationId &&
     stored.actionId === requested.actionId &&
+    stored.action === requested.action &&
     stored.fingerprint === requested.fingerprint &&
     stored.expiresAtMs === requested.expiresAtMs
   );
@@ -174,6 +147,9 @@ function projectState(stored, requested) {
     stored.actionId !== requested.actionId
   ) {
     return { state: "uncertain" };
+  }
+  if (stored.action !== requested.action) {
+    return { state: "conflict" };
   }
   if (stored.fingerprint !== requested.fingerprint) {
     return { state: "conflict" };
@@ -349,7 +325,7 @@ export async function createFileRemoteActionReplayStore({
         throw new Error("invalid replay claim file");
       }
       await handle.writeFile(
-        JSON.stringify({ version: 1, state: "claimed", ...requested }),
+        JSON.stringify({ version: 2, state: "claimed", ...requested }),
         "utf8",
       );
       await syncFile(handle);
@@ -411,10 +387,11 @@ export async function createFileRemoteActionReplayStore({
       }
       await handle.writeFile(
         JSON.stringify({
-          version: 1,
+          version: 2,
           state: "completed",
           installationId: requested.installationId,
           actionId: requested.actionId,
+          action: requested.action,
           fingerprint: requested.fingerprint,
           expiresAtMs: requested.expiresAtMs,
           receipt: requested.receipt,

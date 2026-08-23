@@ -158,9 +158,11 @@ contract in an owner-private external `0700` directory. It hashes the verified
 installation/action pair into a filename, claims with exclusive no-follow file
 creation, stores only `0600` records, syncs file and directory durability, and
 commits a completed receipt through an adjacent temporary file and atomic
-rename. Identical completed retries return that receipt; conflicting reuse
-rejects; incomplete, malformed, permission-invalid, or durability-uncertain
-records never dispatch. Records are not automatically deleted in this phase.
+rename. Version 2 records bind the safe action kind as well as the action ID, so
+a completion receipt cannot change either value. Identical completed retries
+return that receipt; conflicting reuse rejects; incomplete, malformed,
+permission-invalid, or durability-uncertain records never dispatch. Records are
+not automatically deleted in this phase.
 
 `src/remote-action-secrets.mjs` supplies the paired-token verifier and keyed-HMAC
 fingerprinter from two separate, canonical base64url files. Each file must
@@ -182,6 +184,18 @@ trailers, and unique protected headers before it buffers at most 32 KiB. Only
 the content type, paired bearer, and Tailscale capability header reach the pure
 handler. Responses are content-free, non-cacheable, and connection-closing.
 Shutdown stops acceptance, revokes controls, and bounds socket draining.
+
+`src/remote-action-receipt.mjs` is the single public-receipt contract used by
+the ingress, durable replay validation, and listener. Its table owns the exact
+five-field shape, allowlisted reason, HTTP status, and correlation rule.
+Accepted receipts and every domain or post-dispatch rejection must match the
+submitted action ID and action kind exactly; `invalidAction` and `unauthorized`
+must remain uncorrelated. Correlated `invalidRequest` is only `400`; its `404`
+and `413` forms are pre-action only. The same table also limits handler receipts
+to the content-type, invalid-action, or valid-action phase observed by the
+listener. The listener independently parses the submitted envelope through the
+ingress validator, rejects mismatched or semantically impossible handler
+receipts, and emits fixed-order JSON bytes.
 
 The adapter has no CLI and is not a persistent service. Deterministic tests open
 it on an ephemeral loopback port with synthetic temporary secrets and replay

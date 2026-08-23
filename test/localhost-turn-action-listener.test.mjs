@@ -12,6 +12,16 @@ import {
   REMOTE_TURN_ACTION_PATH,
 } from "../src/tailscale-turn-action-ingress.mjs";
 
+const DEFAULT_REMOTE_ACTION = Object.freeze({
+  schemaVersion: 1,
+  actionId: "action-safe-1",
+  controlContextId: "A".repeat(43),
+  issuedAt: "2026-08-22T20:00:00.000Z",
+  expiresAt: "2026-08-22T20:01:00.000Z",
+  action: "stop",
+});
+const DEFAULT_REQUEST_BODY = JSON.stringify(DEFAULT_REMOTE_ACTION);
+
 function ingressResponse({
   statusCode = 200,
   actionId = "action-safe-1",
@@ -40,7 +50,7 @@ function requestListener({
   port,
   method = "POST",
   path = REMOTE_TURN_ACTION_PATH,
-  body = "{}",
+  body = DEFAULT_REQUEST_BODY,
   headers = {},
 } = {}) {
   const encoded = Buffer.isBuffer(body) ? body : Buffer.from(body);
@@ -53,6 +63,7 @@ function requestListener({
         method,
         path,
         headers: {
+          "content-type": "application/json",
           ...headers,
           "content-length": encoded.byteLength,
         },
@@ -175,7 +186,7 @@ test("starts closed, binds only literal IPv4 loopback, projects headers, and clo
           "content-type": "application/json",
           "tailscale-app-capabilities": "{\"safe\":[]}",
         },
-        body: Buffer.from("{}"),
+        body: Buffer.from(DEFAULT_REQUEST_BODY),
       },
     );
   } finally {
@@ -309,6 +320,16 @@ test("rejects duplicate protected raw headers before the handler", async () => {
     assert.ok(
       duplicateLength === "" || /^HTTP\/1\.1 400 /u.test(duplicateLength),
     );
+
+    const fillerHeaders = Array.from(
+      { length: 27 },
+      (_, index) => `X-Filler-${index}: safe`,
+    ).join("\r\n");
+    const duplicateAfterLimit = await rawRequest({
+      port,
+      raw: `POST ${REMOTE_TURN_ACTION_PATH} HTTP/1.1\r\nHost: 127.0.0.1:${port}\r\nAuthorization: Bearer first\r\nContent-Type: application/json\r\nTailscale-App-Capabilities: {}\r\nContent-Length: 2\r\n${fillerHeaders}\r\nAuthorization: Bearer hidden-duplicate\r\n\r\n{}`,
+    });
+    assert.match(duplicateAfterLimit, /^HTTP\/1\.1 400 /u);
     assert.equal(handled, 0);
   } finally {
     await listener.close();
@@ -326,9 +347,14 @@ test("enforces declared and streamed body byte limits before the handler", async
   });
   const { port } = await listener.start();
   try {
+    const paddedBody = Buffer.from(
+      `${DEFAULT_REQUEST_BODY}${" ".repeat(
+        MAX_REMOTE_ACTION_BODY_BYTES - Buffer.byteLength(DEFAULT_REQUEST_BODY),
+      )}`,
+    );
     const atLimit = await requestListener({
       port,
-      body: Buffer.alloc(MAX_REMOTE_ACTION_BODY_BYTES, 0x41),
+      body: paddedBody,
     });
     assert.equal(atLimit.statusCode, 200);
     assert.equal(handled, 1);
@@ -355,11 +381,8 @@ test("enforces declared and streamed body byte limits before the handler", async
   }
 });
 
-test("contains thrown and malformed handler results in a content-free response", async () => {
+test("contains malformed handler results in a content-free response", async () => {
   for (const handleRequest of [
-    async () => {
-      throw new Error("SENSITIVE_THROWN_HANDLER_VALUE");
-    },
     async () => ({
       statusCode: 200,
       headers: { "content-type": "text/plain" },
@@ -370,6 +393,41 @@ test("contains thrown and malformed handler results in a content-free response",
         statusCode: 200,
         outcome: "rejected",
         reason: "unavailable",
+      }),
+    async () =>
+      ingressResponse({
+        actionId: null,
+        action: null,
+      }),
+    async () =>
+      ingressResponse({
+        actionId: null,
+      }),
+    async () =>
+      ingressResponse({
+        action: null,
+      }),
+    async () =>
+      ingressResponse({
+        actionId: "different-action-id",
+      }),
+    async () =>
+      ingressResponse({
+        action: "reply",
+      }),
+    async () =>
+      ingressResponse({
+        statusCode: 409,
+        actionId: null,
+        action: null,
+        outcome: "rejected",
+        reason: "wrongThread",
+      }),
+    async () =>
+      ingressResponse({
+        statusCode: 400,
+        outcome: "rejected",
+        reason: "invalidAction",
       }),
     async () => ({
       ...ingressResponse(),
@@ -403,12 +461,192 @@ test("contains thrown and malformed handler results in a content-free response",
       assert.equal(result.statusCode, 503);
       assert.deepEqual(JSON.parse(result.body), {
         schemaVersion: 1,
-        actionId: null,
-        action: null,
+        actionId: "action-safe-1",
+        action: "stop",
         outcome: "rejected",
         reason: "unavailable",
       });
       assert.doesNotMatch(result.body, /SENSITIVE_/u);
+    } finally {
+      await listener.close();
+    }
+  }
+});
+
+test("contains thrown handlers with only phase-valid correlation", async () => {
+  const cases = [
+    {
+      body: DEFAULT_REQUEST_BODY,
+      headers: {},
+      actionId: "action-safe-1",
+      action: "stop",
+    },
+    {
+      body: "{}",
+      headers: {},
+      actionId: null,
+      action: null,
+    },
+    {
+      body: DEFAULT_REQUEST_BODY,
+      headers: { "content-type": "text/plain" },
+      actionId: null,
+      action: null,
+    },
+  ];
+
+  for (const entry of cases) {
+    const listener = createLocalhostTurnActionListener({
+      handleRequest: async () => {
+        throw new Error("SENSITIVE_THROWN_HANDLER_VALUE");
+      },
+      revokeControlContexts: () => {},
+    });
+    const { port } = await listener.start();
+    try {
+      const result = await requestListener({ port, ...entry });
+      assert.equal(result.statusCode, 503);
+      assert.deepEqual(JSON.parse(result.body), {
+        schemaVersion: 1,
+        actionId: entry.actionId,
+        action: entry.action,
+        outcome: "rejected",
+        reason: "unavailable",
+      });
+      assert.doesNotMatch(result.body, /SENSITIVE_/u);
+    } finally {
+      await listener.close();
+    }
+  }
+});
+
+test("canonicalizes valid handler receipts before responding", async () => {
+  const noncanonicalBody = [
+    "{",
+    '  "reason": null,',
+    '  "outcome": "accepted",',
+    '  "action": "\\u0073top",',
+    '  "actionId": "action\\u002dsafe\\u002d1",',
+    '  "schemaVersion": 1e0',
+    "}",
+  ].join("\n");
+  const listener = createLocalhostTurnActionListener({
+    handleRequest: async () => ({
+      ...ingressResponse(),
+      body: noncanonicalBody,
+    }),
+    revokeControlContexts: () => {},
+  });
+  const { port } = await listener.start();
+  try {
+    const result = await requestListener({ port });
+    assert.equal(result.statusCode, 200);
+    assert.equal(
+      result.body,
+      JSON.stringify({
+        schemaVersion: 1,
+        actionId: "action-safe-1",
+        action: "stop",
+        outcome: "accepted",
+        reason: null,
+      }),
+    );
+    assert.notEqual(result.body, noncanonicalBody);
+  } finally {
+    await listener.close();
+  }
+});
+
+test("allows only receipts modeled for the observed handler phase", async () => {
+  const cases = [
+    {
+      body: DEFAULT_REQUEST_BODY,
+      headers: { "content-type": "text/plain" },
+      expectedStatusCode: 400,
+      response: ingressResponse({
+        statusCode: 400,
+        actionId: null,
+        action: null,
+        outcome: "rejected",
+        reason: "invalidRequest",
+      }),
+    },
+    {
+      body: "{}",
+      headers: {},
+      expectedStatusCode: 400,
+      response: ingressResponse({
+        statusCode: 400,
+        actionId: null,
+        action: null,
+        outcome: "rejected",
+        reason: "invalidAction",
+      }),
+    },
+    {
+      body: DEFAULT_REQUEST_BODY,
+      headers: {},
+      expectedStatusCode: 401,
+      response: ingressResponse({
+        statusCode: 401,
+        actionId: null,
+        action: null,
+        outcome: "rejected",
+        reason: "unauthorized",
+      }),
+    },
+    {
+      body: DEFAULT_REQUEST_BODY,
+      headers: {},
+      expectedStatusCode: 503,
+      response: ingressResponse({
+        statusCode: 404,
+        outcome: "rejected",
+        reason: "invalidRequest",
+      }),
+      expectedBody: JSON.stringify({
+        schemaVersion: 1,
+        actionId: "action-safe-1",
+        action: "stop",
+        outcome: "rejected",
+        reason: "unavailable",
+      }),
+    },
+    {
+      body: "{}",
+      headers: {},
+      expectedStatusCode: 503,
+      response: ingressResponse({
+        statusCode: 400,
+        actionId: null,
+        action: null,
+        outcome: "rejected",
+        reason: "invalidRequest",
+      }),
+      expectedBody: JSON.stringify({
+        schemaVersion: 1,
+        actionId: null,
+        action: null,
+        outcome: "rejected",
+        reason: "unavailable",
+      }),
+    },
+  ];
+
+  for (const entry of cases) {
+    const listener = createLocalhostTurnActionListener({
+      handleRequest: async () => entry.response,
+      revokeControlContexts: () => {},
+    });
+    const { port } = await listener.start();
+    try {
+      const result = await requestListener({
+        port,
+        body: entry.body,
+        headers: entry.headers,
+      });
+      assert.equal(result.statusCode, entry.expectedStatusCode);
+      assert.equal(result.body, entry.expectedBody ?? entry.response.body);
     } finally {
       await listener.close();
     }
@@ -449,18 +687,25 @@ test("close stops acceptance, revokes controls, and lets an active handler finis
   assert.deepEqual(events, ["handler-started", "revoked", "handler-finished"]);
 });
 
-test("close prevents reentrant and later listener startup", async () => {
+test("close is reentrant and prevents reentrant or later startup", async () => {
   let listener;
+  let reentrantClose;
   let reentrantStartRejected = false;
+  let revocations = 0;
   listener = createLocalhostTurnActionListener({
     handleRequest: async () => ingressResponse(),
     revokeControlContexts: () => {
+      revocations += 1;
       assert.throws(() => listener.start(), /closing|closed/u);
       reentrantStartRejected = true;
+      if (revocations === 1) reentrantClose = listener.close();
     },
   });
 
-  await listener.close();
+  const pendingClose = listener.close();
+  assert.equal(reentrantClose, pendingClose);
+  await Promise.all([pendingClose, reentrantClose]);
+  assert.equal(revocations, 1);
   assert.equal(reentrantStartRejected, true);
   assert.equal(listener.listening, false);
   assert.throws(() => listener.start(), /closing|closed/u);
