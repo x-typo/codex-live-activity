@@ -23,6 +23,7 @@ const REPLY_TEXT = "SYNTHETIC_PRIVATE_REPLY_MUST_NOT_PERSIST";
 const replayRecord = Object.freeze({
   installationId: "installation-iphone-1",
   actionId: "remote-reply-1",
+  action: "reply",
   fingerprint: "a".repeat(64),
   expiresAtMs: Date.parse("2026-08-22T20:01:00.000Z"),
 });
@@ -80,6 +81,16 @@ test("persists claim and content-free completion across store restarts", async (
     const recordPath = join(directoryPath, files[0]);
     assert.equal((await stat(recordPath)).mode & 0o777, 0o600);
     const retained = await readFile(recordPath, "utf8");
+    assert.deepEqual(JSON.parse(retained), {
+      version: 2,
+      state: "completed",
+      installationId: replayRecord.installationId,
+      actionId: replayRecord.actionId,
+      action: replayRecord.action,
+      fingerprint: replayRecord.fingerprint,
+      expiresAtMs: replayRecord.expiresAtMs,
+      receipt: acceptedReceipt,
+    });
     assert.doesNotMatch(
       retained,
       new RegExp(`${REPLY_TEXT}|app-token|controlContext|thread-|turn-`, "u"),
@@ -231,9 +242,44 @@ test("rejects content-bearing or mismatched completion receipts", async () => {
     await assert.rejects(
       store.complete({
         ...replayRecord,
+        receipt: {
+          ...acceptedReceipt,
+          outcome: "rejected",
+          reason: "invalidAction",
+        },
+      }),
+      /invalid replay receipt/u,
+    );
+    await assert.rejects(
+      store.complete({
+        ...replayRecord,
+        receipt: {
+          schemaVersion: 1,
+          actionId: null,
+          action: null,
+          outcome: "rejected",
+          reason: "wrongThread",
+        },
+      }),
+      /invalid replay receipt/u,
+    );
+    await assert.rejects(
+      store.complete({
+        ...replayRecord,
         receipt: { ...acceptedReceipt, actionId: "remote-other" },
       }),
       /replay completion target is uncertain|invalid replay receipt/u,
+    );
+    await assert.rejects(
+      store.complete({
+        ...replayRecord,
+        receipt: { ...acceptedReceipt, action: "stop" },
+      }),
+      /invalid replay receipt/u,
+    );
+    assert.deepEqual(
+      await store.inspect({ ...replayRecord, action: "stop" }),
+      { state: "conflict" },
     );
     assert.deepEqual(await store.inspect(replayRecord), { state: "uncertain" });
   } finally {

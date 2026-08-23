@@ -4,6 +4,13 @@ import {
   MAX_REPLY_CODE_POINTS,
   RELAY_TURN_ACTION_SCHEMA_VERSION,
 } from "./relay-turn-action.mjs";
+import {
+  createRemoteActionReceipt,
+  defaultHttpStatusForRemoteActionReceipt,
+  isHttpStatusForRemoteActionReceipt,
+  projectRemoteActionReceipt,
+  serializeRemoteActionReceipt,
+} from "./remote-action-receipt.mjs";
 import { CONTROL_CONTEXT_ID_PATTERN } from "./remote-action-control.mjs";
 import { parseJsonRejectingDuplicateMembers } from "./strict-json.mjs";
 
@@ -15,24 +22,6 @@ export const MIN_REMOTE_ACTION_HMAC_KEY_BYTES = 32;
 
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}(?![\s\S])/u;
 const FINGERPRINT = /^[a-f0-9]{64}$/u;
-const SAFE_REASONS = new Set([
-  "appServerRejected",
-  "busy",
-  "duplicateAction",
-  "expiredControlContext",
-  "expiredRequest",
-  "invalidAction",
-  "invalidRequest",
-  "noActiveTurn",
-  "outcomeUnknown",
-  "replayConflict",
-  "staleTurn",
-  "stopPending",
-  "unauthorized",
-  "unavailable",
-  "unknownControlContext",
-  "wrongThread",
-]);
 const ACTIONS = new Set(["reply", "stop"]);
 
 function isObject(value) {
@@ -150,7 +139,7 @@ function requestBodyBytes(body) {
   return Number.NaN;
 }
 
-function hasJsonContentType(value) {
+export function hasRemoteActionJsonContentType(value) {
   if (typeof value !== "string" || value.length > 256) return false;
   return /^application\/json(?:[ \t]*;[ \t]*charset=(?:utf-8|"utf-8"))?[ \t]*$/i.test(
     value,
@@ -226,34 +215,28 @@ function validateRemoteAction(candidate) {
   }
 }
 
-function networkReceipt({ actionId = null, action = null, outcome, reason }) {
-  if (
-    !["accepted", "rejected"].includes(outcome) ||
-    (reason !== null && !SAFE_REASONS.has(reason)) ||
-    (outcome === "accepted" && reason !== null) ||
-    (outcome === "rejected" && reason === null)
-  ) {
-    throw new TypeError("invalid remote action receipt");
+export function parseRemoteActionRequestBody(body) {
+  try {
+    return validateRemoteAction(
+      parseJsonRejectingDuplicateMembers(decodeRequestBody(body)),
+    );
+  } catch {
+    return null;
   }
-  return {
-    schemaVersion: RELAY_TURN_ACTION_SCHEMA_VERSION,
-    actionId: isSafeId(actionId) ? actionId : null,
-    action: safeAction(action),
-    outcome,
-    reason,
-  };
 }
 
 function rejected(reason, action = null) {
-  return networkReceipt({
-    actionId: action?.actionId,
-    action: action?.action,
+  return createRemoteActionReceipt({
+    action,
     outcome: "rejected",
     reason,
   });
 }
 
 function response(statusCode, receipt) {
+  if (!isHttpStatusForRemoteActionReceipt(statusCode, receipt)) {
+    throw new TypeError("invalid remote action response");
+  }
   return {
     statusCode,
     headers: {
@@ -261,66 +244,67 @@ function response(statusCode, receipt) {
       "content-type": "application/json; charset=utf-8",
       "x-content-type-options": "nosniff",
     },
-    body: JSON.stringify(receipt),
+    body: serializeRemoteActionReceipt(receipt),
   };
 }
 
 function statusFor(receipt) {
-  if (receipt.outcome === "accepted") return 200;
-  if (receipt.reason === "invalidRequest" || receipt.reason === "invalidAction") {
-    return 400;
-  }
-  if (receipt.reason === "unauthorized") return 401;
-  if (receipt.reason === "unavailable" || receipt.reason === "outcomeUnknown") {
-    return 503;
-  }
-  if (receipt.reason === "appServerRejected") return 502;
-  return 409;
+  return defaultHttpStatusForRemoteActionReceipt(receipt);
 }
 
 function completedReceipt(value, action) {
-  if (
-    !hasExactKeys(value, [
-      "action",
-      "actionId",
-      "outcome",
-      "reason",
-      "schemaVersion",
-    ]) ||
-    value.schemaVersion !== RELAY_TURN_ACTION_SCHEMA_VERSION ||
-    value.actionId !== action.actionId ||
-    value.action !== action.action ||
-    !["accepted", "rejected"].includes(value.outcome) ||
-    (value.reason !== null && !SAFE_REASONS.has(value.reason))
-  ) {
-    return null;
-  }
-  return networkReceipt(value);
+  return projectRemoteActionReceipt(value, {
+    expectedAction: action,
+    requireCorrelation: true,
+  });
 }
 
 function actionResultReceipt(value, action) {
   const expectedMethod =
     action.action === "reply" ? "turn/steer" : "turn/interrupt";
+  const expectedKeys = [
+    "action",
+    "actionId",
+    "appServerMethod",
+    "outcome",
+    "reason",
+    "schemaVersion",
+  ];
+  let candidate;
+  try {
+    if (!hasExactKeys(value, expectedKeys)) return null;
+    candidate = {
+      schemaVersion: value.schemaVersion,
+      actionId: value.actionId,
+      action: value.action,
+      outcome: value.outcome,
+      reason: value.reason,
+      appServerMethod: value.appServerMethod,
+    };
+    if (!hasExactKeys(value, expectedKeys)) return null;
+  } catch {
+    return null;
+  }
   if (
-    !hasExactKeys(value, [
-      "action",
-      "actionId",
-      "appServerMethod",
-      "outcome",
-      "reason",
-      "schemaVersion",
-    ]) ||
-    value.schemaVersion !== RELAY_TURN_ACTION_SCHEMA_VERSION ||
-    value.actionId !== action.actionId ||
-    value.action !== action.action ||
-    !["accepted", "rejected"].includes(value.outcome) ||
-    (value.reason !== null && !SAFE_REASONS.has(value.reason)) ||
-    (value.outcome === "accepted" && value.appServerMethod !== expectedMethod) ||
-    (value.outcome === "rejected" && value.appServerMethod !== null)
+    candidate.schemaVersion !== RELAY_TURN_ACTION_SCHEMA_VERSION ||
+    candidate.actionId !== action.actionId ||
+    candidate.action !== action.action ||
+    (candidate.outcome === "accepted" &&
+      candidate.appServerMethod !== expectedMethod) ||
+    (candidate.outcome === "rejected" && candidate.appServerMethod !== null)
   ) {
     return null;
   }
-  return networkReceipt(value);
+  return projectRemoteActionReceipt(
+    {
+      schemaVersion: candidate.schemaVersion,
+      actionId: candidate.actionId,
+      action: candidate.action,
+      outcome: candidate.outcome,
+      reason: candidate.reason,
+    },
+    { expectedAction: action, requireCorrelation: true },
+  );
 }
 
 function validateContext(
@@ -480,7 +464,11 @@ export function createTailscaleTurnActionRequestHandler({
     if (bodyBytes > MAX_REMOTE_ACTION_BODY_BYTES) {
       return response(413, rejected("invalidRequest"));
     }
-    if (!hasJsonContentType(headerValue(request.headers, "content-type"))) {
+    if (
+      !hasRemoteActionJsonContentType(
+        headerValue(request.headers, "content-type"),
+      )
+    ) {
       return response(400, rejected("invalidRequest"));
     }
     if (
@@ -506,14 +494,7 @@ export function createTailscaleTurnActionRequestHandler({
       return response(401, rejected("unauthorized"));
     }
 
-    let action;
-    try {
-      action = validateRemoteAction(
-        parseJsonRejectingDuplicateMembers(decodeRequestBody(request.body)),
-      );
-    } catch {
-      action = null;
-    }
+    const action = parseRemoteActionRequestBody(request.body);
     if (action === null) return response(400, rejected("invalidAction"));
 
     let nowMs;
@@ -551,6 +532,7 @@ export function createTailscaleTurnActionRequestHandler({
     const replayRecord = {
       installationId,
       actionId: action.actionId,
+      action: action.action,
       fingerprint,
       expiresAtMs,
     };

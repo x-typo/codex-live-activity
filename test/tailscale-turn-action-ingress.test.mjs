@@ -666,6 +666,60 @@ test("a completed retry returns its receipt after private context revocation", a
   assert.equal(base.requests.length, 1);
 });
 
+test("rejects completed replay receipts that do not match the submitted action", async () => {
+  const action = remoteStop();
+  const fingerprint = createRemoteActionHmacFingerprint(
+    "SENSITIVE_SYNTHETIC_FINGERPRINT_KEY",
+  )(action);
+  const malformedReceipts = [
+    {
+      schemaVersion: 1,
+      actionId: "different-action-id",
+      action: "stop",
+      outcome: "accepted",
+      reason: null,
+    },
+    {
+      schemaVersion: 1,
+      actionId: action.actionId,
+      action: "reply",
+      outcome: "accepted",
+      reason: null,
+    },
+    {
+      schemaVersion: 1,
+      actionId: null,
+      action: null,
+      outcome: "rejected",
+      reason: "wrongThread",
+    },
+  ];
+
+  for (const receipt of malformedReceipts) {
+    const replayStore = new DeterministicReplayStore();
+    replayStore.records.set(`installation-iphone-1:${action.actionId}`, {
+      installationId: "installation-iphone-1",
+      actionId: action.actionId,
+      fingerprint,
+      expiresAtMs: Date.parse(action.expiresAt),
+      receipt,
+    });
+    const state = createHarness({ replayStore });
+    const result = await state.handler(requestFor(action));
+
+    assert.equal(result.statusCode, 503);
+    assert.deepEqual(receiptFrom(result), {
+      schemaVersion: 1,
+      actionId: action.actionId,
+      action: action.action,
+      outcome: "rejected",
+      reason: "unavailable",
+    });
+    assert.deepEqual(state.requests, []);
+    assert.equal(state.resolutionCalls, 0);
+  }
+});
+
 test("an incomplete durable claim is outcome-unknown and never redispatched", async () => {
   const replayStore = new DeterministicReplayStore();
   const state = createHarness({ replayStore });
@@ -783,6 +837,22 @@ test("malformed or expanded private receipts become outcome-unknown", async () =
   const malformedReceipts = [
     {
       schemaVersion: 1,
+      actionId: "different-action-id",
+      action: "reply",
+      outcome: "accepted",
+      reason: null,
+      appServerMethod: "turn/steer",
+    },
+    {
+      schemaVersion: 1,
+      actionId: "remote-reply-1",
+      action: "stop",
+      outcome: "accepted",
+      reason: null,
+      appServerMethod: "turn/steer",
+    },
+    {
+      schemaVersion: 1,
       actionId: "remote-reply-1",
       action: "reply",
       outcome: "accepted",
@@ -802,12 +872,27 @@ test("malformed or expanded private receipts become outcome-unknown", async () =
       schemaVersion: 1,
       actionId: "remote-reply-1",
       action: "reply",
+      outcome: "accepted",
+      reason: "busy",
+      appServerMethod: "turn/steer",
+    },
+    {
+      schemaVersion: 1,
+      actionId: "remote-reply-1",
+      action: "reply",
       outcome: "rejected",
       reason: "appServerRejected",
       appServerMethod: "turn/steer",
     },
+    {
+      schemaVersion: 1,
+      actionId: "remote-reply-1",
+      action: "reply",
+      outcome: "rejected",
+      reason: null,
+      appServerMethod: null,
+    },
   ];
-
   for (const malformedReceipt of malformedReceipts) {
     const state = createHarness({
       dispatchOverride: async () => structuredClone(malformedReceipt),
@@ -820,4 +905,31 @@ test("malformed or expanded private receipts become outcome-unknown", async () =
     assert.equal(retained.includes("turn/steer"), false);
     assert.equal(retained.includes("turn/interrupt"), false);
   }
+});
+
+test("snapshots hostile private receipt accessors before validation", async () => {
+  let outcomeReads = 0;
+  const changingOutcomeReceipt = {
+    schemaVersion: 1,
+    actionId: "remote-reply-1",
+    action: "reply",
+    reason: null,
+    appServerMethod: null,
+  };
+  Object.defineProperty(changingOutcomeReceipt, "outcome", {
+    enumerable: true,
+    get: () => {
+      outcomeReads += 1;
+      return outcomeReads < 3 ? "unknown" : "accepted";
+    },
+  });
+  const state = createHarness({
+    dispatchOverride: async () => changingOutcomeReceipt,
+  });
+
+  const result = await state.handler(requestFor(remoteReply()));
+
+  assert.equal(outcomeReads, 1);
+  assert.equal(result.statusCode, 503);
+  assert.equal(receiptFrom(result).reason, "outcomeUnknown");
 });

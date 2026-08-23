@@ -319,19 +319,21 @@ content-free rejection and cannot reach App Server.
 
 Adding the opaque context to the iPhone/ActivityKit flow is a later protected
 schema and privacy decision. The registry proves Mac-side issuance but does not
-place a context in ActivityKit or APNs, so no executable listener is wired yet.
+place a context in ActivityKit or APNs. The localhost adapter therefore has no
+real device context to accept in this phase.
 
 #### Durable replay, receipts, and unavailability
 
 The ingress uses a file replay store with an atomic claim-before-send contract.
 Its key is the verified installation ID plus action ID; the filename is derived
-from their SHA-256 hash. The owner-private JSON record retains those two safe
-identifiers for integrity validation, plus a keyed-HMAC fingerprint of the
-canonical request, the request expiry, and the eventual content-free receipt. A
-plain reply-text hash is not retained because guessable text could be recovered
-by comparison. The HMAC key loader requires a separate owner-private external
-file containing the canonical base64url encoding of exactly 32 random bytes and
-keeps the key stable for at least the replay-retention horizon.
+from their SHA-256 hash. The owner-private version 2 JSON record retains those
+two safe identifiers and the safe action kind for integrity validation, plus a
+keyed-HMAC fingerprint of the canonical request, the request expiry, and the
+eventual content-free receipt. A plain reply-text hash is not retained because
+guessable text could be recovered by comparison. The HMAC key loader requires a
+separate owner-private external file containing the canonical base64url
+encoding of exactly 32 random bytes and keeps the key stable for at least the
+replay-retention horizon.
 
 The replay root must already exist outside the repository as an owner-owned
 `0700` non-symlink directory. Claims use exclusive, no-follow creation of a
@@ -342,8 +344,10 @@ sync failure remains a durability failure even if the completed bytes are later
 visible. Malformed, truncated, linked, permission-invalid, replaced-root, and
 other ambiguous states are never considered missing.
 
-- same ID and same fingerprint after completion returns the stored receipt;
-- same ID and a different fingerprint rejects as `replayConflict`;
+- same ID, action kind, and fingerprint after completion returns the stored
+  receipt;
+- same ID with a different action kind or fingerprint rejects as
+  `replayConflict`;
 - a claimed action without a committed receipt returns `outcomeUnknown` and is
   not dispatched again; and
 - a receipt-commit failure after dispatch also returns `outcomeUnknown` and
@@ -355,6 +359,32 @@ the effect. Reply acceptance still requires `turn/steer` to return the same
 private turn ID. All network receipts project only schema version, safe action
 ID, action kind, outcome, and an allowlisted reason.
 
+`src/remote-action-receipt.mjs` is the canonical table and projector for that
+public shape. Ingress production, replay persistence, and listener egress all
+use it rather than maintaining separate allowlists or status predicates:
+
+| Outcome / reason | Correlation | Allowed HTTP status |
+| --- | --- | --- |
+| `accepted` / `null` | exact submitted action | `200` |
+| `invalidAction` | `null` / `null` only | `400` |
+| `unauthorized` | `null` / `null` only | `401` |
+| `invalidRequest` | pre-action `null` / `null` | `400`, `404`, `413` |
+| `invalidRequest` | exact submitted action | `400` |
+| `unavailable` | outer-adapter `null` / `null` or exact submitted action | `503` |
+| `outcomeUnknown` | exact submitted action | `503` |
+| `appServerRejected` | exact submitted action | `502` |
+| `busy`, `duplicateAction`, `expiredControlContext`, `expiredRequest`, `noActiveTurn`, `replayConflict`, `staleTurn`, `stopPending`, `unknownControlContext`, `wrongThread` | exact submitted action | `409` |
+
+The listener parses the request body through the same remote-action validator
+used by ingress, retains only the transient validated action for correlation,
+classifies the handler call as invalid content type, invalid action, or valid
+action, and reserializes every admitted receipt into fixed field order. The
+table permits only the ingress outcomes possible in that observed phase. Mixed
+nullability, a different action ID or kind, and any reason/status/correlation or
+handler-phase combination outside the table fail closed as an `unavailable`
+adapter response. That fallback retains the exact submitted action only after
+the action has already been validated; otherwise it is uncorrelated.
+
 There is no server or cloud command queue. If the Mac, Tailscale, ingress, replay
 store, or App Server is unavailable, the phone reports not delivered or outcome
 unknown. It may retry only the same action ID while the request remains valid;
@@ -362,13 +392,39 @@ it never optimistically displays a stopped task. Unsent Reply text stays only in
 the foreground composer unless encrypted draft retention is separately chosen.
 
 The current implementation supplies the strict JSON adapter boundary, one-task
-context registry, owner-private secret loader/verifier, and durable file replay
-store. A listener-free integration test composes all four with synthetic
-temporary state. It intentionally supplies no network listener, real token
-generation or phone pairing, Keychain adapter, Tailscale configuration, Swift
-UI, App Intent, or live App Server integration. Replay records are retained
-indefinitely in this phase; no automatic pruning may erase a tombstone and make
-an old action dispatchable again.
+context registry, owner-private secret loader/verifier, durable file replay
+store, and `src/localhost-turn-action-listener.mjs`. The listener factory is
+closed by default and has no executable entry point. Its explicit one-shot
+`start()` accepts only a validated port and hard-codes literal `127.0.0.1`; it
+does not accept a host, DNS name, wildcard, IPv6, LAN, or Tailscale address. The
+bound address is checked after startup, and a failed fixed-port bind never
+falls back to another port or interface.
+
+Before the pure handler runs, the adapter requires exact HTTP/1.1 method, target,
+and local `Host`, rejects transfer encoding, content encoding, trailers,
+expectations, duplicate protected or framing headers, and non-canonical or
+oversized `Content-Length`, and buffers no more than the ingress's 32 KiB byte
+limit. It projects only `content-type`, `authorization`, and
+`tailscale-app-capabilities`; arbitrary headers and socket metadata never cross
+the seam. Every application response adds an exact byte length and closes the
+connection. Parser errors, upgrades, CONNECT, handler exceptions, and malformed
+handler output cannot expose request or error content.
+
+Construction opens no socket. Shutdown first stops new accepts, then revokes all
+control contexts, closes idle connections, and gives active requests a bounded
+grace period before forcing their sockets closed. A claimed action is never
+deleted during shutdown: an interrupted durable outcome remains an uncertain
+tombstone and cannot become dispatchable after restart.
+
+The integration proof composes all five pieces with synthetic temporary state,
+uses a real ephemeral loopback socket, verifies an authorized Reply and durable
+retry, verifies unauthorized rejection, then closes the listener and removes
+the temporary state. It intentionally supplies no real token generation or
+phone pairing, Keychain adapter, Tailscale configuration, Swift UI, App Intent,
+relay/App Server executable wiring, or persistent service. The later Serve phase
+must observe the actual forwarded `Host` before selecting its exact configured
+authority. Replay records are retained indefinitely in this phase; no automatic
+pruning may erase a tombstone and make an old action dispatchable again.
 
 An App Intent's authentication policy defaults to `alwaysAllowed`, including
 when the device is locked. The future Stop `LiveActivityIntent` must therefore
